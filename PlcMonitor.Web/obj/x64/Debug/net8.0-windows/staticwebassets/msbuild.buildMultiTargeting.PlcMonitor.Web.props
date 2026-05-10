@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="..\build\PlcMonitor.Web.props" />
-</Project>
