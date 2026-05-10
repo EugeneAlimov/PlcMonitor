@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PLC Monitor — Проект</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/css/app.css">
+<link rel="stylesheet" href="/css/project.css">
+</head>
+<body>
+
+<header>
+  <a href="/" class="logo">PLC<span>Monitor</span></a>
+  <div class="breadcrumb">
+    <span class="sep">›</span>
+    <span class="current" id="project-title">Загрузка...</span>
+  </div>
+  <div class="header-actions">
+    <button class="btn btn-ghost btn-sm" onclick="saveProject()">💾 Сохранить</button>
+    <button class="btn btn-ghost btn-sm btn-icon" title="Настройки">⚙</button>
+  </div>
+</header>
+
+<div class="workspace">
+
+  <!-- ЛЕВАЯ ПАНЕЛЬ -->
+  <div class="left-panel" id="left-panel">
+
+    <!-- 1. Дерево тегов -->
+    <div class="section" id="section-tree">
+      <div class="section-header" onclick="toggleSection('section-tree')">
+        <span class="section-chevron">▶</span>
+        <span class="section-title">🌲 Дерево тегов</span>
+        <span class="section-badge" id="tree-badge">—</span>
+      </div>
+      <div class="section-body" style="flex:1;min-height:0;display:flex;flex-direction:column;">
+        <div class="tree-search">
+          <input type="text" id="tree-search" placeholder="🔍 Поиск..." oninput="filterTree(this.value)">
+        </div>
+        <div id="tag-tree" style="flex:1;overflow-y:auto;min-height:0;"></div>
+      </div>
+    </div>
+
+    <!-- 2. Группы -->
+    <div class="section" id="section-groups" style="flex-shrink:0;">
+      <div class="section-header" onclick="toggleSection('section-groups')">
+        <span class="section-chevron">▶</span>
+        <span class="section-title">📁 Группы</span>
+        <span class="section-badge" id="groups-badge">0</span>
+      </div>
+      <div class="section-body" style="max-height:200px;">
+        <div class="groups-list" id="groups-list"></div>
+        <button class="btn btn-ghost btn-sm groups-add-btn" onclick="openNewGroupDialog()">+ Новая группа</button>
+      </div>
+    </div>
+
+    <!-- 3. Текущий набор -->
+    <div class="section" id="section-staging" style="flex-shrink:0;">
+      <div class="section-header" onclick="toggleSection('section-staging')">
+        <span class="section-chevron">▶</span>
+        <span class="section-title">⚡ Текущий набор</span>
+        <span class="section-badge" id="staging-badge">0</span>
+      </div>
+      <div class="section-body" style="max-height:220px;display:flex;flex-direction:column;">
+        <div class="staging-list" id="staging-list">
+          <div class="staging-empty">Добавьте теги из дерева<br>нажав [+]</div>
+        </div>
+        <div class="staging-actions" id="staging-actions" style="display:none;">
+          <button class="btn btn-primary btn-sm" style="flex:1" onclick="openSaveGroupDialog()">Сохранить как группу</button>
+          <button class="btn btn-ghost btn-sm" onclick="clearStaging()">Очистить</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="resizer" id="resizer"></div>
+  </div>
+
+  <!-- ПРАВАЯ ПАНЕЛЬ -->
+  <div class="right-panel">
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('tab-plc')" id="tabBtn-plc">ПЛК и сканирование</div>
+      <div class="tab" onclick="showTab('tab-group')" id="tabBtn-group">Группа</div>
+    </div>
+
+    <div class="tab-content active" id="tab-plc">
+      <div class="plc-setup">
+        <h2>ПЛК и сканирование</h2>
+        <div id="plc-cards"></div>
+        <button class="btn btn-ghost" onclick="openAddPlcDialog()">+ Добавить ПЛК</button>
+      </div>
+    </div>
+
+    <div class="tab-content" id="tab-group">
+      <div id="group-view-container">
+        <div class="empty-right">
+          <div class="empty-right-icon">📊</div>
+          <div>Выберите группу из списка слева</div>
+          <div style="font-size:11px;margin-top:4px;color:var(--text3)">или создайте новую</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Диалог — Добавить ПЛК -->
+<div class="overlay" id="dlg-add-plc">
+  <div class="dialog">
+    <h3>Добавить ПЛК</h3>
+    <div class="field-row">
+      <label>Имя (отображаемое) не обязательно. Если оставить пустым, будет взято из проекта.</label>
+      <input id="plc-name" placeholder="Например: PLC_1">
+    </div>
+    <div class="field-row">
+      <label>IP адрес</label>
+      <input id="plc-ip" placeholder="192.168.0.1">
+    </div>
+    <div class="field-row" style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div><label>Rack</label><input id="plc-rack" value="0" type="number"></div>
+      <div><label>Slot</label><input id="plc-slot" value="1" type="number"></div>
+    </div>
+    <div class="field-row">
+      <label>Путь к TIA проекту</label>
+      <div style="display:flex;gap:6px;">
+        <input id="plc-tia-path" placeholder="C:\Projects\MyProject.ap20"
+               style="flex:1">
+        <button class="btn btn-ghost" onclick="browseTiaProject()"
+                style="padding:7px 10px;flex-shrink:0;">📁</button>
+      </div>
+      <div id="tia-path-status" style="margin-top:4px;font-size:11px;color:var(--text3);">
+        Выберите файл проекта TIA Portal
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" onclick="closeDialog('dlg-add-plc')">Отмена</button>
+      <button class="btn btn-primary" id="btn-add-plc" onclick="addPlc()" disabled
+              style="opacity:0.5;cursor:not-allowed;">Добавить</button>
+    </div>
+  </div>
+</div>
+
+<!-- Диалог — Новая группа -->
+<div class="overlay" id="dlg-new-group">
+  <div class="dialog">
+    <h3>Новая группа</h3>
+    <div class="field-row">
+      <label>Название</label>
+      <input id="grp-name" placeholder="Например: PID1, Motor1...">
+    </div>
+    <div class="field-row">
+      <label>Частота опроса</label>
+      <select id="grp-interval">
+        <option value="10">10 мс</option>
+        <option value="50">50 мс</option>
+        <option value="100">100 мс</option>
+        <option value="200">200 мс</option>
+        <option value="500" selected>500 мс</option>
+        <option value="1000">1 сек</option>
+        <option value="2000">2 сек</option>
+        <option value="5000">5 сек</option>
+        <option value="10000">10 сек</option>
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" onclick="closeDialog('dlg-new-group')">Отмена</button>
+      <button class="btn btn-primary" onclick="createGroup()">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- Диалог — Сохранить как группу -->
+<div class="overlay" id="dlg-save-group">
+  <div class="dialog">
+    <h3>Сохранить как группу</h3>
+    <div class="field-row">
+      <label>Название группы</label>
+      <input id="save-grp-name" placeholder="Например: PID1">
+    </div>
+    <div class="field-row">
+      <label>Частота опроса</label>
+      <select id="save-grp-interval">
+        <option value="10">10 мс</option>
+        <option value="50">50 мс</option>
+        <option value="100">100 мс</option>
+        <option value="200">200 мс</option>
+        <option value="500" selected>500 мс</option>
+        <option value="1000">1 сек</option>
+        <option value="2000">2 сек</option>
+        <option value="5000">5 сек</option>
+        <option value="10000">10 сек</option>
+      </select>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" onclick="closeDialog('dlg-save-group')">Отмена</button>
+      <button class="btn btn-primary" onclick="saveGroupFromStaging()">Сохранить</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="/js/virtual-tree.js"></script>
+<script src="/js/project.js"></script>
+</body>
+</html>

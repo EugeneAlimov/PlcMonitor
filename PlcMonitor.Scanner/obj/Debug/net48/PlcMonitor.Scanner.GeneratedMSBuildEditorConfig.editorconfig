@@ -1,0 +1,5 @@
+is_global = true
+build_property.RootNamespace = PlcMonitor.Scanner
+build_property.ProjectDir = C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Scanner\
+build_property.EnableComHosting = 
+build_property.EnableGeneratedComInterfaceComImportInterop = 

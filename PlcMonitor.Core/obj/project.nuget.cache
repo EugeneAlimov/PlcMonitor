@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "dgSpecHash": "BDobOVqz4Vo=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Crazy\\Desktop\\PlcMonitor\\PlcMonitor.Core\\PlcMonitor.Core.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Crazy\\.nuget\\packages\\microsoft.csharp\\4.7.0\\microsoft.csharp.4.7.0.nupkg.sha512",
+    "C:\\Users\\Crazy\\.nuget\\packages\\newtonsoft.json\\13.0.3\\newtonsoft.json.13.0.3.nupkg.sha512"
+  ],
+  "logs": []
+}

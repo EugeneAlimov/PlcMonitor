@@ -1,0 +1,16 @@
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\PlcMonitor.Core.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\PlcMonitor.Core.pdb
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Newtonsoft.Json.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Siemens.Engineering.Contract.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Siemens.Engineering.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Siemens.Engineering.Hmi.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Siemens.Engineering.xml
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\bin\x64\Debug\net48\Siemens.Engineering.Hmi.xml
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.csproj.AssemblyReference.cache
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.AssemblyInfoInputs.cache
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.AssemblyInfo.cs
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.csproj.CoreCompileInputs.cache
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonit.691245FA.Up2Date
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.dll
+C:\Users\Crazy\Desktop\PlcMonitor\PlcMonitor.Core\obj\x64\Debug\net48\PlcMonitor.Core.pdb
