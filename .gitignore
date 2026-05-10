@@ -1,0 +1,23 @@
+\PlcMonitor.Core\bin
+\PlcMonitor.Core\obj
+\PlcMonitor.Scanner\bin
+\PlcMonitor.Scanner\obj
+\PlcMonitor.Web\bin
+\PlcMonitor.Web\obj
+
+# Сборка
+[Bb]in/
+[Oo]bj/
+
+# Настройки Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Результаты тестов
+TestResults/
+
+# Прочее
+*.log
