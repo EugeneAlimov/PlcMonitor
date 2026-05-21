@@ -26,6 +26,8 @@ try
 }
 catch (Exception ex)
 {
-    Console.Error.WriteLine($"SCAN_ERROR:{ex.Message}");
+    var inner = ex;
+    while (inner.InnerException != null) inner = inner.InnerException;
+    Console.Error.WriteLine($"SCAN_ERROR:{ex.Message} → {inner.Message}");
     Environment.Exit(2);
 }

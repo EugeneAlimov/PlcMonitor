@@ -49,6 +49,7 @@ public Task<List<PlcScanResult>> ScanAsync(string projectPath)
             {
                 FileName               = scannerExe,
                 Arguments              = $"\"{projectPath}\"",
+                WorkingDirectory       = Path.GetDirectoryName(scannerExe),
                 UseShellExecute        = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError  = true,
