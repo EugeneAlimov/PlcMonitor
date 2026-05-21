@@ -7,6 +7,7 @@
 <link rel="icon" href="data:,">
 <link rel="stylesheet" href="/css/app.css">
 <link rel="stylesheet" href="/css/project.css">
+<link rel="stylesheet" href="/css/trend.css">
 </head>
 <body>
 
@@ -15,6 +16,7 @@
   <div class="breadcrumb">
     <span class="sep">›</span>
     <span class="current" id="project-title">Загрузка...</span>
+    <span id="signalr-status" class="signalr-status" title="SignalR"></span>
   </div>
   <div class="header-actions">
     <button class="btn btn-ghost btn-sm" onclick="saveProject()">💾 Сохранить</button>
@@ -81,6 +83,7 @@
     <div class="tabs">
       <div class="tab active" onclick="showTab('tab-plc')" id="tabBtn-plc">ПЛК и сканирование</div>
       <div class="tab" onclick="showTab('tab-group')" id="tabBtn-group">Группа</div>
+      <div class="tab" onclick="showTab('tab-trend')" id="tabBtn-trend">📈 Тренд</div>
     </div>
 
     <div class="tab-content active" id="tab-plc">
@@ -100,8 +103,14 @@
         </div>
       </div>
     </div>
+
+   <div class="tab-content" id="tab-trend">
+     <div id="trend-container"></div>
+   </div>
+
   </div>
 </div>
+
 
 <!-- Диалог — Добавить ПЛК -->
 <div class="overlay" id="dlg-add-plc">
@@ -200,5 +209,8 @@
 <div class="toast" id="toast"></div>
 <script src="/js/virtual-tree.js"></script>
 <script src="/js/project.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
+<script src="/js/live-data.js"></script>
+<script src="/js/trend.js"></script>
 </body>
 </html>

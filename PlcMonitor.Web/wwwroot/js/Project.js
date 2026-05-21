@@ -11,6 +11,8 @@ const state = {
   groupColors:  ['#3b82f6','#22c55e','#f59e0b','#ef4444','#a855f7','#06b6d4','#f97316','#ec4899']
 };
 
+window._state = state;
+
 // ══ УТИЛИТЫ ════════════════════════════════════════════════
 function escHtml(s) {
   return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -29,6 +31,16 @@ function showTab(id) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.getElementById(id).classList.add('active');
   document.getElementById('tabBtn-' + id.replace('tab-', '')).classList.add('active');
+ 
+  if (id === 'tab-group') {
+    LiveData.refreshVisibleGroup();
+  }
+ 
+  if (id === 'tab-trend') {
+    Trend.show();         // запускает rAF-цикл и перестраивает список групп
+  } else {
+    Trend.hide();         // останавливает rAF когда вкладка не видна
+  }
 }
 
 function closeDialog(id) {
@@ -257,7 +269,7 @@ function renderStagingList() {
   }
   actions.style.display = 'flex';
   list.innerHTML = state.staging.map((t, i) => `
-    <div class="staging-tag">
+    <div class="staging-tag"  draggable="true" ondragstart="stagingDragStart(event, ${i})" data-staging-idx="${i}">
       <span class="staging-tag-name" title="${escHtml(t.symbolicPath||t.name)}">${escHtml(t.name)}</span>
       <span class="staging-tag-type">${escHtml(t.dataType||'')}</span>
       <span class="staging-remove" onclick="removeFromStaging(${i})">✕</span>
@@ -309,7 +321,7 @@ function showGroupView(groupId) {
         </div>
         <div style="display:flex;gap:6px;">
           <button class="btn btn-ghost btn-sm" onclick="addStagingToGroup('${group.id}')">+ Добавить из набора</button>
-          <button class="btn btn-ghost btn-sm">▶ Запустить</button>
+          <button class="btn btn-ghost btn-sm" onclick="LiveData.toggleGroup('${group.id}')">▶ Запустить</button>
         </div>
       </div>
       ${tags.length === 0 ? `
@@ -318,7 +330,10 @@ function showGroupView(groupId) {
           <div>Группа пуста</div>
           <div style="font-size:11px;margin-top:4px;color:var(--text3)">Добавьте теги через «Текущий набор»</div>
         </div>` : `
-        <table class="tags-table">
+        <table class="tags-table"
+          ondragover="event.preventDefault(); this.classList.add('drop-hover')"
+           ondragleave="this.classList.remove('drop-hover')"
+           ondrop="this.classList.remove('drop-hover'); stagingDropToGroup(event, '${group.id}')">
           <thead><tr><th></th><th>Имя</th><th>Путь</th><th>Тип</th><th>Значение</th><th></th></tr></thead>
           <tbody>${tags.map(t => `
             <tr>
@@ -326,7 +341,7 @@ function showGroupView(groupId) {
               <td class="tag-name">${escHtml(t.displayName||t.symbolicPath)}</td>
               <td class="tag-path">${escHtml(t.symbolicPath||'')}</td>
               <td class="tag-type">${escHtml(t.dataType||'')}</td>
-              <td class="tag-value no-data">—</td>
+              <td class="tag-value no-data" data-value-cell="${t.id}">—</td>
               <td><button class="btn btn-ghost btn-sm" onclick="removeTagFromGroup('${group.id}','${t.id}')">✕</button></td>
             </tr>`).join('')}
           </tbody>
@@ -797,4 +812,58 @@ document.getElementById('grp-name').addEventListener('keydown', e => { if (e.key
 document.getElementById('save-grp-name').addEventListener('keydown', e => { if (e.key==='Enter') saveGroupFromStaging(); });
 
 // ══ СТАРТ ═══════════════════════════════════════════════════
+
+function stagingDragStart(event, idx) {
+  event.dataTransfer.setData('staging-idx', String(idx));
+  event.dataTransfer.effectAllowed = 'copy';
+  // Подсветка drag-курсора
+  event.target.style.opacity = '0.6';
+  event.target.addEventListener('dragend', () => {
+    event.target.style.opacity = '';
+  }, { once: true });
+}
+ 
+async function stagingDropToGroup(event, groupId) {
+  event.preventDefault();
+  const idx = parseInt(event.dataTransfer.getData('staging-idx'));
+  if (isNaN(idx) || idx < 0 || idx >= state.staging.length) return;
+ 
+  const tag = state.staging[idx];
+  const plc = state.plcSources.find(p => p.id === tag.plcId) || state.plcSources[0];
+  if (!plc) { showToast('Нет ПЛК в проекте', 'error'); return; }
+ 
+  // Проверка: тег уже в этой группе?
+  const group = state.groups.find(g => g.id === groupId);
+  if (group) {
+    const alreadyIn = (group.tagIds || []).some(tid => {
+      const t = state.project?.tags?.find(t2 => t2.id === tid);
+      return t && t.symbolicPath === tag.symbolicPath && t.plcSourceId === (tag.plcId || plc.id);
+    });
+    if (alreadyIn) { showToast('Тег уже в группе', ''); return; }
+  }
+ 
+  await fetch(`${API}/api/project/tag`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      plcSourceId:     tag.plcId || plc.id,
+      symbolicPath:    tag.symbolicPath,
+      dataType:        tag.dataType,
+      displayName:     tag.name,
+      dbNumber:        tag.dbNumber,
+      byteOffset:      tag.byteOffset,
+      absoluteAddress: tag.absoluteAddress,
+      groupId
+    })
+  });
+ 
+  // Обновляем state
+  const d = await (await fetch(`${API}/api/project`)).json();
+  state.project = d.project;
+  state.groups  = d.project.groups || [];
+  renderGroupsList();
+  showGroupView(groupId);
+  showToast(`${tag.name} добавлен в группу`, 'success');
+}
+
 init();

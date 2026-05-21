@@ -16,15 +16,50 @@
       <HintPath>C:\Program Files\Siemens\Automation\Portal V20\PublicAPI\V20\Siemens.Engineering.dll</HintPath>
       <Private>True</Private>
     </Reference>
-      <Reference Include="Siemens.Engineering.Contract">
-    <HintPath>C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI\Siemens.Engineering.Contract.dll</HintPath>
-    <Private>True</Private>
-  </Reference>
+    <Reference Include="Siemens.Engineering.Contract">
+      <HintPath>C:\Program Files\Siemens\Automation\Portal V20\Bin\PublicAPI\Siemens.Engineering.Contract.dll</HintPath>
+      <Private>True</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
+
+<ItemGroup>
+  <Reference Include="S7CommPlusDriver">
+    <HintPath>..\S7CommPlusDriver\src\S7CommPlusDriver\bin\x64\Debug\S7CommPlusDriver.dll</HintPath>
+  </Reference>
+</ItemGroup>
+
+<ItemGroup>
+  <Content Include="..\S7CommPlusDriver\src\S7CommPlusDriver\OpenSSL-dll-x64\libcrypto-3-x64.dll">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  </Content>
+  <Content Include="..\S7CommPlusDriver\src\S7CommPlusDriver\OpenSSL-dll-x64\libssl-3-x64.dll">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+  </Content>
+</ItemGroup>
+
+  <!--
+    Если используешь собранную DLL вместо исходников — раскомментируй:
+
+    <ItemGroup>
+      <Reference Include="S7CommPlusDriver">
+        <HintPath>..\libs\S7CommPlusDriver.dll</HintPath>
+      </Reference>
+    </ItemGroup>
+
+    OpenSSL DLL нужно копировать в output (x64):
+    <ItemGroup>
+      <Content Include="..\libs\libcrypto-3-x64.dll">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+      <Content Include="..\libs\libssl-3-x64.dll">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </Content>
+    </ItemGroup>
+  -->
 
 </Project>

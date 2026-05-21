@@ -159,3 +159,15 @@ header {
 /* ── Пустое ── */
 .empty-right { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; color:var(--text3); font-size:13px; }
 .empty-right-icon { font-size:40px; margin-bottom:4px; }
+
+   .signalr-status {
+     width: 8px; height: 8px; border-radius: 50%;
+     display: inline-block; margin-left: 8px;
+   }
+   .signalr-status.connected    { background: #4caf50; }
+   .signalr-status.connecting   { background: #ff9800; }
+   .signalr-status.disconnected { background: #9e9e9e; }
+
+.staging-tag { cursor: grab; }
+.staging-tag:active { cursor: grabbing; }
+.tags-table.drop-hover { outline: 2px dashed var(--accent, #388bfd); outline-offset: -2px; }

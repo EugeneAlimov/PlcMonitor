@@ -14,6 +14,8 @@ builder.Services.AddControllers();
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<ScannerService>();
 builder.Services.AddSingleton<ProjectService>();
+builder.Services.AddSingleton<LiveDataService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<LiveDataService>());
 builder.Services.AddCors(options =>
     options.AddDefaultPolicy(policy =>
         policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
