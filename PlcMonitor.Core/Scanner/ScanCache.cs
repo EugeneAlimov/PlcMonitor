@@ -8,11 +8,12 @@ namespace PlcMonitor.Scanner
 {
     public class ScanCache
     {
-        private static readonly JsonSerializerSettings Settings = new JsonSerializerSettings
+        // Метод вместо статического поля — устраняет TypeInitializationException
+        private static JsonSerializerSettings MakeSettings() => new JsonSerializerSettings
         {
-            Formatting = Formatting.Indented,
+            Formatting        = Formatting.Indented,
             NullValueHandling = NullValueHandling.Ignore,
-            Converters = { new StringEnumConverter() }
+            Converters        = { new StringEnumConverter() }
         };
 
         public void Save(List<PlcScanResult> results, string cacheFilePath)
@@ -20,7 +21,7 @@ namespace PlcMonitor.Scanner
             var dir = Path.GetDirectoryName(cacheFilePath);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
-            var json = JsonConvert.SerializeObject(results, Settings);
+            var json = JsonConvert.SerializeObject(results, MakeSettings());
             File.WriteAllText(cacheFilePath, json, System.Text.Encoding.UTF8);
         }
 
@@ -30,15 +31,16 @@ namespace PlcMonitor.Scanner
                 return new CacheLoadResult { Status = CacheStatus.NotFound };
             try
             {
-                var json = File.ReadAllText(cacheFilePath, System.Text.Encoding.UTF8);
-                var results = JsonConvert.DeserializeObject<List<PlcScanResult>>(json, Settings);
+                var json    = File.ReadAllText(cacheFilePath, System.Text.Encoding.UTF8);
+                var results = JsonConvert.DeserializeObject<List<PlcScanResult>>(json, MakeSettings());
                 if (results == null || results.Count == 0)
                     return new CacheLoadResult { Status = CacheStatus.NotFound };
 
                 var projectModified = File.GetLastWriteTime(projectPath);
                 var cachedModified  = results[0].ProjectModified;
                 var status = projectModified > cachedModified
-                    ? CacheStatus.Stale : CacheStatus.Valid;
+                    ? CacheStatus.Stale
+                    : CacheStatus.Valid;
 
                 return new CacheLoadResult
                 {
@@ -72,9 +74,10 @@ namespace PlcMonitor.Scanner
         public DateTime            CachedModified  { get; set; }
         public string              Message         { get; set; }
 
-        public bool IsValid    => Status == CacheStatus.Valid;
-        public bool IsStale    => Status == CacheStatus.Stale;
-        public bool NeedsScan  => Status is CacheStatus.NotFound or CacheStatus.Error;
+        public bool IsValid   => Status == CacheStatus.Valid;
+        public bool IsStale   => Status == CacheStatus.Stale;
+        public bool NeedsScan => Status is CacheStatus.NotFound or CacheStatus.Error;
+
         public TimeSpan ProjectAge => DateTime.Now - ProjectModified;
     }
 }
