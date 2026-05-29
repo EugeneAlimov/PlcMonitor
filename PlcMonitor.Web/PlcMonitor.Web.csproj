@@ -16,4 +16,17 @@
   <ProjectReference Include="..\PlcMonitor.Scanner\PlcMonitor.Scanner.csproj" />
 </ItemGroup>
 
+  <!-- Копируем net48-версию Newtonsoft.Json для Scanner.exe subprocess -->
+<Target Name="CopyScannerToSubdir" AfterTargets="Build">
+  <MakeDir Directories="$(OutputPath)Scanner" />
+  <ItemGroup>
+    <ScannerFiles Include="$(MSBuildThisFileDirectory)..\PlcMonitor.Scanner\bin\x64\Debug\net48\*.*" />
+  </ItemGroup>
+  <Copy
+    SourceFiles="@(ScannerFiles)"
+    DestinationFolder="$(OutputPath)Scanner"
+    OverwriteReadOnlyFiles="true"
+    SkipUnchangedFiles="false" />
+</Target>
+
 </Project>

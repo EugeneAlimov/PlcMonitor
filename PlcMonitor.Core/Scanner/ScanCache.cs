@@ -8,7 +8,6 @@ namespace PlcMonitor.Scanner
 {
     public class ScanCache
     {
-        // Метод вместо статического поля — устраняет TypeInitializationException
         private static JsonSerializerSettings MakeSettings() => new JsonSerializerSettings
         {
             Formatting        = Formatting.Indented,
@@ -76,8 +75,6 @@ namespace PlcMonitor.Scanner
 
         public bool IsValid   => Status == CacheStatus.Valid;
         public bool IsStale   => Status == CacheStatus.Stale;
-        public bool NeedsScan => Status is CacheStatus.NotFound or CacheStatus.Error;
-
-        public TimeSpan ProjectAge => DateTime.Now - ProjectModified;
+        public bool NeedsScan => Status == CacheStatus.NotFound || Status == CacheStatus.Error;
     }
 }

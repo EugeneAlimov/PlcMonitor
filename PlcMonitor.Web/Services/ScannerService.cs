@@ -33,19 +33,24 @@ public Task<List<PlcScanResult>> ScanAsync(string projectPath)
     {
         try
         {
+            Status.Log.Add($"{DateTime.Now:HH:mm:ss} 11111111111111111");
             // Ищем PlcMonitor.Scanner.exe рядом с нашим exe
-            var scannerExe = System.IO.Path.Combine(
-                System.IO.Path.GetDirectoryName(
+            var scannerExe = Path.Combine(
+                Path.GetDirectoryName(
                     System.Reflection.Assembly.GetExecutingAssembly().Location),
+                "Scanner",
                 "PlcMonitor.Scanner.exe");
-
-            if (!System.IO.File.Exists(scannerExe))
+            Status.Log.Add($"{DateTime.Now:HH:mm:ss} 22222222222222222");
+            if (!File.Exists(scannerExe))
                 throw new FileNotFoundException(
                     $"Не найден PlcMonitor.Scanner.exe: {scannerExe}");
 
             Status.Log.Add($"{DateTime.Now:HH:mm:ss} Запускаем сканер...");
+            Status.Log.Add($"{DateTime.Now:HH:mm:ss} EXE: {scannerExe}");
+            Status.Log.Add($"{DateTime.Now:HH:mm:ss} WorkDir: {Path.GetDirectoryName(scannerExe)}");
 
             var psi = new System.Diagnostics.ProcessStartInfo
+            
             {
                 FileName               = scannerExe,
                 Arguments              = $"\"{projectPath}\"",
