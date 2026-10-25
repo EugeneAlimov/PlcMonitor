@@ -838,7 +838,10 @@ const Trend = (() => {
     return v.toFixed(2);
   }
 
-  function fmtWin(s) { return s >= 60 ? Math.round(s/60)+'м' : s+'с'; }
+  function fmtWin(s) {
+    if (s >= 60) { const m = s / 60; return (m < 10 ? +m.toFixed(1) : Math.round(m)) + 'м'; }
+    return (s < 10 ? +s.toFixed(1) : Math.round(s)) + 'с';
+  }
   function clampWin(s) { return Math.max(5, Math.min(300, s)); }
   function updateWinLabel(gid, s) {
     const el = document.getElementById(`trend-win-${gid}`);

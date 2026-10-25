@@ -123,6 +123,21 @@ namespace PlcMonitor.Monitoring
             return group;
         }
 
+        public bool IsGroupNameTaken(string name, string exceptGroupId = null) =>
+            Groups.Any(g => g.Id != exceptGroupId &&
+                string.Equals((g.Name ?? "").Trim(), (name ?? "").Trim(),
+                              StringComparison.OrdinalIgnoreCase));
+
+        public MonitorGroup UpdateGroup(string groupId, string name, int? pollIntervalMs)
+        {
+            var group = Groups.FirstOrDefault(g => g.Id == groupId);
+            if (group == null) return null;
+            if (!string.IsNullOrWhiteSpace(name)) group.Name = name.Trim();
+            if (pollIntervalMs.HasValue) group.PollIntervalMs = pollIntervalMs.Value;
+            Modified = DateTime.UtcNow;
+            return group;
+        }
+
         /// <summary>
         /// Удаляет группу. Теги, которые больше не входят ни в одну группу,
         /// удаляются из проекта (вне групп они всё равно не опрашиваются).

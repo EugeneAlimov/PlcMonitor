@@ -316,8 +316,12 @@ function showGroupView(groupId) {
       <div class="group-header">
         <div class="group-title-row">
           <div class="group-dot" style="width:12px;height:12px;background:${color};border-radius:50%;"></div>
-          <div class="group-title">${escHtml(group.name)}</div>
-          <div class="group-interval-badge">${group.pollIntervalMs} мс</div>
+          <div class="group-title" title="Двойной клик — переименовать"
+               ondblclick="renameGroup('${group.id}')">${escHtml(group.name)}</div>
+          <select class="group-interval-select" title="Частота опроса"
+                  onchange="updateGroup('${group.id}', { pollIntervalMs: parseInt(this.value) })">
+            ${intervalOptions(group.pollIntervalMs)}
+          </select>
         </div>
         <div style="display:flex;gap:6px;">
           <button class="btn btn-ghost btn-sm" onclick="addStagingToGroup('${group.id}')">+ Добавить из набора</button>
@@ -385,6 +389,52 @@ async function removeTagFromGroup(groupId, tagId) {
   state.groups  = d.project.groups || [];
   renderGroupsList();
   showGroupView(groupId);
+}
+
+const POLL_INTERVALS = [10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+
+function intervalOptions(current) {
+  const list = POLL_INTERVALS.includes(current) ? POLL_INTERVALS
+             : [...POLL_INTERVALS, current].sort((a, b) => a - b);
+  return list.map(ms => `<option value="${ms}" ${ms === current ? 'selected' : ''}>${
+    ms >= 1000 ? (ms / 1000) + ' с' : ms + ' мс'}</option>`).join('');
+}
+
+function isGroupNameTaken(name, exceptId) {
+  const n = name.trim().toLowerCase();
+  return state.groups.some(g => g.id !== exceptId && (g.name || '').trim().toLowerCase() === n);
+}
+
+async function reloadProjectState() {
+  const d = await (await fetch(`${API}/api/project`)).json();
+  state.project = d.project;
+  state.groups  = d.project.groups || [];
+}
+
+async function updateGroup(groupId, patch) {
+  const res = await fetch(`${API}/api/project/group/${groupId}`, {
+    method: 'PATCH', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(patch)
+  });
+  if (!res.ok) {
+    showToast(await res.text() || 'Не удалось изменить группу', 'error');
+    showGroupView(groupId);                 // откатить select/имя в UI
+    return false;
+  }
+  await reloadProjectState();
+  renderGroupsList();
+  showGroupView(groupId);
+  if (typeof Trend !== 'undefined') Trend.rebuild();
+  return true;
+}
+
+async function renameGroup(groupId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  const name = prompt('Новое имя группы', group.name);
+  if (name == null || name.trim() === '' || name.trim() === group.name) return;
+  if (isGroupNameTaken(name, groupId)) { showToast(`Группа "${name.trim()}" уже существует`, 'error'); return; }
+  if (await updateGroup(groupId, { name: name.trim() })) showToast('Группа переименована', 'success');
 }
 
 async function deleteGroup(groupId) {
@@ -783,11 +833,13 @@ async function createGroup() {
   const name = document.getElementById('grp-name').value.trim();
   const ms   = parseInt(document.getElementById('grp-interval').value);
   if (!name) { showToast('Введите название', 'error'); return; }
+  if (isGroupNameTaken(name)) { showToast(`Группа "${name}" уже существует`, 'error'); return; }
 
   const res   = await fetch(`${API}/api/project/group`, {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ name, pollIntervalMs: ms })
   });
+  if (!res.ok) { showToast(await res.text() || 'Ошибка создания группы', 'error'); return; }
   const group = await res.json();
   state.groups.push(group);
   closeDialog('dlg-new-group');
@@ -806,11 +858,13 @@ async function saveGroupFromStaging() {
   const ms   = parseInt(document.getElementById('save-grp-interval').value);
   if (!name) { showToast('Введите название', 'error'); return; }
   if (state.staging.length === 0) { showToast('Набор пуст', 'error'); return; }
+  if (isGroupNameTaken(name)) { showToast(`Группа "${name}" уже существует`, 'error'); return; }
 
   const res   = await fetch(`${API}/api/project/group`, {
     method: 'POST', headers: {'Content-Type':'application/json'},
     body: JSON.stringify({ name, pollIntervalMs: ms })
   });
+  if (!res.ok) { showToast(await res.text() || 'Ошибка создания группы', 'error'); return; }
   const group = await res.json();
   state.groups.push(group);
   closeDialog('dlg-save-group');

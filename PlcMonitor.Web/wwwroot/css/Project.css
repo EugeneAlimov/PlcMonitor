@@ -141,6 +141,9 @@ header {
 .group-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .group-title-row { display:flex; align-items:center; gap:10px; }
 .group-title { font-family:var(--sans); font-size:18px; font-weight:700; color:#fff; }
+.group-title { cursor: text; }
+.group-interval-select { padding:3px 6px; background:var(--bg3); border:1px solid var(--border2); border-radius:5px; font-size:11px; color:var(--text2); font-family:inherit; cursor:pointer; }
+.group-interval-select:hover { border-color: var(--accent); }
 .group-interval-badge { padding:3px 8px; background:var(--bg3); border:1px solid var(--border2); border-radius:5px; font-size:11px; color:var(--text2); }
 .tags-table { width:100%; border-collapse:collapse; font-size:12px; }
 .tags-table th { text-align:left; padding:6px 10px; font-size:10px; color:var(--text3); text-transform:uppercase; letter-spacing:.8px; border-bottom:1px solid var(--border); font-weight:400; }

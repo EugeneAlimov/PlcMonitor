@@ -123,8 +123,28 @@ namespace PlcMonitor.Web.Controllers
         public IActionResult CreateGroup([FromBody] CreateGroupRequest request)
         {
             if (!_project.IsLoaded) return BadRequest("Проект не открыт");
-            return Ok(_project.Current.CreateGroup(request.Name, request.PollIntervalMs));
+            var name = request.Name?.Trim();
+            if (string.IsNullOrEmpty(name)) return BadRequest("Пустое имя группы");
+            if (_project.Current.IsGroupNameTaken(name))
+                return Conflict($"Группа \"{name}\" уже существует");
+            return Ok(_project.Current.CreateGroup(name, ClampInterval(request.PollIntervalMs)));
         }
+
+        [HttpPatch("group/{groupId}")]
+        public IActionResult UpdateGroup(string groupId, [FromBody] UpdateGroupRequest request)
+        {
+            if (!_project.IsLoaded) return BadRequest("Проект не открыт");
+            var name = request.Name?.Trim();
+            if (name != null && name.Length == 0) return BadRequest("Пустое имя группы");
+            if (name != null && _project.Current.IsGroupNameTaken(name, groupId))
+                return Conflict($"Группа \"{name}\" уже существует");
+            int? interval = request.PollIntervalMs.HasValue
+                ? ClampInterval(request.PollIntervalMs.Value) : (int?)null;
+            var group = _project.Current.UpdateGroup(groupId, name, interval);
+            return group == null ? NotFound() : Ok(group);
+        }
+
+        private static int ClampInterval(int ms) => Math.Max(10, Math.Min(60_000, ms));
 
         [HttpPost("tag")]
         public IActionResult AddTag([FromBody] AddTagRequest request)
@@ -352,6 +372,12 @@ namespace PlcMonitor.Web.Controllers
     {
         public string Name           { get; set; }
         public int    PollIntervalMs { get; set; } = 500;
+    }
+
+    public class UpdateGroupRequest
+    {
+        public string Name           { get; set; }
+        public int?   PollIntervalMs { get; set; }
     }
 
     public class AddTagRequest
