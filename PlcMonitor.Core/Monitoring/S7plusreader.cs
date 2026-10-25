@@ -89,6 +89,9 @@ namespace PlcMonitor.Monitoring
 
         // ── Browse ────────────────────────────────────────────────────────────
 
+        private static readonly string[] AreaPrefixes =
+            { "IArea.", "QArea.", "MArea.", "S7Timers.", "S7Counters." };
+
         private int DoBrowse()
         {
             int res = _conn.Browse(out List<VarInfo> varInfoList);
@@ -103,7 +106,29 @@ namespace PlcMonitor.Monitoring
                     _varCache[key] = vi;
             }
 
-            _log($"Browse OK: {_varCache.Count} переменных в кэше");
+            // Теги из таблиц тегов драйвер отдаёт с префиксом области:
+            // "MArea.Clock_2Hz", "IArea.Start", "QArea.Lamp", "S7Timers.T1".
+            // В TIA (и в нашем скане) они называются просто "Clock_2Hz".
+            // Имена PLC-тегов уникальны в пределах ПЛК, а ключи DB всегда
+            // содержат точку ("DB.member"), так что алиас без префикса безопасен.
+            int aliases = 0;
+            foreach (var vi in varInfoList)
+            {
+                var name = NormalizePath(vi.Name);
+                foreach (var area in AreaPrefixes)
+                {
+                    if (!name.StartsWith(area, StringComparison.OrdinalIgnoreCase)) continue;
+                    var alias = name.Substring(area.Length);
+                    if (alias.Length > 0 && !_varCache.ContainsKey(alias))
+                    {
+                        _varCache[alias] = vi;
+                        aliases++;
+                    }
+                    break;
+                }
+            }
+
+            _log($"Browse OK: {_varCache.Count} переменных в кэше (из них {aliases} алиасов I/Q/M/T/C)");
             return 0;
         }
 
@@ -156,7 +181,11 @@ namespace PlcMonitor.Monitoring
                 }
             }
 
-            _lastTagIds = new HashSet<string>(_tagCache.Keys);
+            // Запоминаем ЗАПРОШЕННЫЙ набор, а не разрешённый — иначе каждый
+            // неразрешённый тег заставляет TagsChanged() возвращать true
+            // и BuildTagList крутится на каждом цикле опроса.
+            _lastTagIds = new HashSet<string>(
+                tags.Where(t => t.IsEnabled).Select(t => t.Id));
             _log($"BuildTagList: {found} разрешено, {notFound} не найдено");
         }
 
