@@ -29,28 +29,25 @@ public Task<List<PlcScanResult>> ScanAsync(string projectPath)
     Status = new ScanStatus { IsRunning = true, ProjectPath = projectPath };
     Status.Log.Add($"{DateTime.Now:HH:mm:ss} Начинаем сканирование: {projectPath}");
 
+    var scannerExe = Path.Combine(
+        AppContext.BaseDirectory,
+        "Scanner",
+        "PlcMonitor.Scanner.exe");
+    Status.Log.Add($"{DateTime.Now:HH:mm:ss} EXE: {scannerExe}");
+    Status.Log.Add($"{DateTime.Now:HH:mm:ss} SIZE: {(File.Exists(scannerExe) ? new FileInfo(scannerExe).Length.ToString() : "NOT FOUND")}");
+    Status.Log.Add($"{DateTime.Now:HH:mm:ss} DATE: {(File.Exists(scannerExe) ? new FileInfo(scannerExe).LastWriteTime.ToString() : "NOT FOUND")}");
+
     return Task.Run(() =>
     {
         try
         {
-            Status.Log.Add($"{DateTime.Now:HH:mm:ss} 11111111111111111");
-            // Ищем PlcMonitor.Scanner.exe рядом с нашим exe
-            var scannerExe = Path.Combine(
-                Path.GetDirectoryName(
-                    System.Reflection.Assembly.GetExecutingAssembly().Location),
-                "Scanner",
-                "PlcMonitor.Scanner.exe");
-            Status.Log.Add($"{DateTime.Now:HH:mm:ss} 22222222222222222");
             if (!File.Exists(scannerExe))
-                throw new FileNotFoundException(
-                    $"Не найден PlcMonitor.Scanner.exe: {scannerExe}");
+                throw new FileNotFoundException($"Не найден: {scannerExe}");
 
             Status.Log.Add($"{DateTime.Now:HH:mm:ss} Запускаем сканер...");
-            Status.Log.Add($"{DateTime.Now:HH:mm:ss} EXE: {scannerExe}");
             Status.Log.Add($"{DateTime.Now:HH:mm:ss} WorkDir: {Path.GetDirectoryName(scannerExe)}");
 
             var psi = new System.Diagnostics.ProcessStartInfo
-            
             {
                 FileName               = scannerExe,
                 Arguments              = $"\"{projectPath}\"",
@@ -88,7 +85,6 @@ public Task<List<PlcScanResult>> ScanAsync(string projectPath)
             if (proc.ExitCode != 0)
                 throw new Exception(Status.Log.LastOrDefault() ?? "Сканирование завершилось с ошибкой");
 
-            // Читаем результат из кэша
             var loadResult = _cache.Load(cachePath, projectPath);
             Status.IsRunning  = false;
             Status.IsComplete = true;
@@ -104,8 +100,8 @@ public Task<List<PlcScanResult>> ScanAsync(string projectPath)
             throw;
         }
     });
-}
-        public CacheLoadResult TryLoadCache(string projectPath)
+
+}        public CacheLoadResult TryLoadCache(string projectPath)
         {
             var cachePath = ScanCache.GetCachePath(projectPath, "scan");
             return _cache.Load(cachePath, projectPath);
