@@ -23,7 +23,13 @@ builder.Services.AddCors(options =>
 var app = builder.Build();
 
 app.UseDefaultFiles();   // index.html по умолчанию
-app.UseStaticFiles();    // статические файлы из wwwroot
+// no-cache: браузер обязан перепроверять файл (ETag) — после git pull
+// не будет старого JS из кеша. Для localhost накладные расходы нулевые.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+        ctx.Context.Response.Headers["Cache-Control"] = "no-cache"
+});
 app.UseCors();
 app.UseRouting();
 app.MapControllers();
