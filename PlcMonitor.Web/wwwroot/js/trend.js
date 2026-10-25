@@ -1,22 +1,39 @@
 // ══════════════════════════════════════════════════════════════════════
-// trend.js v2  —  Canvas-тренд с раздельным масштабированием осей
+// trend.js v4
 //
-// Управление:
-//   Колёсико над графиком (правее осей Y)  → масштаб X (время)
-//   Колёсико над осью Y тега               → масштаб этой оси Y
-//   Drag по оси Y тега                     → смещение по Y
-//   Двойной клик по оси Y                  → сброс в авто-масштаб
+// Зоны взаимодействия:
+//   Над осью Y тега  → колёсико: масштаб этой оси Y
+//                      drag: смещение по Y
+//                      двойной клик: сброс в авто
+//   Над осью X (низ) → колёсико: масштаб X
+//   Над графиком     → колёсико: масштаб X
+//
+// Активная ось Y (под курсором) выделяется жирной линией и крупным шрифтом.
+// WORD/BYTE/DWORD/LWORD отображаются в легенде как 16#XXXX.
+//
+// Курсоры (кнопка ⌖ в шапке полосы):
+//   Две вертикальные линии. Позиция хранится как доля окна (0..1),
+//   т.е. в живом режиме линии стоят на месте экрана, а данные текут
+//   под ними. Drag за линию — перемещение.
+//   Таблица под графиком: значения тегов на C1/C2, ∆Y, ∆T.
+//   Значение на курсоре = последний отсчёт ≤ времени курсора
+//   (sample & hold — честно для опрашиваемых данных, без интерполяции).
 // ══════════════════════════════════════════════════════════════════════
 
 const Trend = (() => {
 
   // ── Константы ────────────────────────────────────────────────────────
 
-  const BUFFER_MS       = 5 * 60 * 1000;   // 5 мин буфер
+  const BUFFER_MS       = 5 * 60 * 1000;
   const DEFAULT_WIN_SEC = 60;
-  const AXIS_W          = 48;               // ширина одной оси Y (px)
-  const BOTTOM_H        = 22;               // высота оси X (px)
+  const AXIS_W          = 52;
+  const BOTTOM_H        = 26;
+  const FONT_NORM       = '11px "Courier New", monospace';
+  const FONT_ACTIVE     = '12px "Courier New", monospace';
   const MIN_STRIP_H     = 100;
+  const CURSOR_HIT_PX   = 6;                 // зона захвата линии курсора
+  const CURSOR_COLORS   = ['#e6edf3', '#fbbf24'];
+  const TABLE_UPDATE_MS = 200;               // частота обновления таблицы курсоров
   const DEFAULT_STRIP_H = 220;
 
   const TAG_COLORS = [
@@ -25,16 +42,14 @@ const Trend = (() => {
     '#a3e635','#34d399','#e879f9','#38bdf8'
   ];
 
+  const HEX_DT    = new Set(['BYTE','WORD','DWORD','LWORD']);
+  const HEX_WIDTH = { BYTE:2, WORD:4, DWORD:8, LWORD:16 };
+
   // ── Хранилище ────────────────────────────────────────────────────────
 
-  // tagId → [{ts, value}]
-  const _buffer  = new Map();
-
-  // tagId → {color, label, fullPath, dataType, isBool, hidden}
-  const _tagMeta = new Map();
-
-  // groupId → strip-объект
-  const _strips  = new Map();
+  const _buffer  = new Map();  // tagId → [{ts, value}]
+  const _tagMeta = new Map();  // tagId → метаданные
+  const _strips  = new Map();  // groupId → strip
 
   let _visible   = false;
   let _container = null;
@@ -49,313 +64,332 @@ const Trend = (() => {
 
   function rebuild() {
     if (!_container) return;
-    const project = window._state?.project;
-    const groups  = project?.groups || [];
-
-    if (groups.length === 0) {
-      _container.innerHTML = '<div class="trend-empty">Нет групп мониторинга.<br>Создайте группу и добавьте теги.</div>';
+    const groups = window._state?.project?.groups || [];
+    if (!groups.length) {
+      _container.innerHTML = '<div class="trend-empty">Нет групп. Создайте группу и добавьте теги.</div>';
       return;
     }
-
-    // Удаляем полосы для несуществующих групп
-    for (const [id, strip] of _strips) {
-      if (!groups.find(g => g.id === id)) {
-        strip.raf && cancelAnimationFrame(strip.raf);
-        _strips.delete(id);
-      }
-    }
-
+    for (const [id, s] of _strips)
+      if (!groups.find(g => g.id === id)) { s.raf && cancelAnimationFrame(s.raf); _strips.delete(id); }
     _container.innerHTML = '';
-    for (const group of groups) {
-      _container.appendChild(buildStripElement(group));
-    }
+    groups.forEach(g => _container.appendChild(buildStrip(g)));
   }
 
-  // ── Построение полосы ────────────────────────────────────────────────
+  // ── Построение полосы ─────────────────────────────────────────────────
 
-  function buildStripElement(group) {
+  function buildStrip(group) {
     const project  = window._state?.project;
-    const tags     = getGroupTags(group, project);
     const existing = _strips.get(group.id);
-    const h        = existing?.height     || DEFAULT_STRIP_H;
-    const winSec   = existing?.windowSec  || DEFAULT_WIN_SEC;
+    const h        = existing?.height    || DEFAULT_STRIP_H;
+    const winSec   = existing?.windowSec || DEFAULT_WIN_SEC;
 
-    resolveTagMeta(tags, group);
+    resolveTagMeta(getGroupTags(group, project), group);
 
-    // Корневой элемент
-    const wrapper = document.createElement('div');
-    wrapper.className = 'trend-strip';
-    wrapper.dataset.groupId = group.id;
+    const wrap = document.createElement('div');
+    wrap.className = 'trend-strip';
+    wrap.dataset.groupId = group.id;
 
     // Шапка
-    const header = document.createElement('div');
-    header.className = 'trend-strip-header';
-    header.innerHTML = `
+    const hdr = document.createElement('div');
+    hdr.className = 'trend-strip-header';
+    hdr.innerHTML = `
       <div class="trend-strip-title">
         <span class="trend-group-name">${escH(group.name)}</span>
         <span class="trend-interval">${group.pollIntervalMs} мс</span>
       </div>
       <div class="trend-strip-controls">
-        <span class="trend-ctrl" title="Уменьшить окно" data-action="zoom-in"  data-gid="${group.id}">⊕</span>
-        <span class="trend-ctrl" title="Увеличить окно" data-action="zoom-out" data-gid="${group.id}">⊖</span>
+        <span class="trend-ctrl" data-action="cursors"  data-gid="${group.id}" id="trend-cur-btn-${group.id}" title="Курсоры">⌖</span>
+        <span class="trend-ctrl" data-action="zoom-in"  data-gid="${group.id}" title="Уменьшить окно">⊕</span>
+        <span class="trend-ctrl" data-action="zoom-out" data-gid="${group.id}" title="Увеличить окно">⊖</span>
         <span class="trend-win-label" id="trend-win-${group.id}">${fmtWin(winSec)}</span>
       </div>`;
-    wrapper.appendChild(header);
-
-    header.addEventListener('click', e => {
-      const action = e.target.dataset.action;
-      const gid    = e.target.dataset.gid;
-      if (!action || !gid) return;
+    hdr.addEventListener('click', e => {
+      const act = e.target.dataset.action;
+      const gid = e.target.dataset.gid;
+      if (!act || !gid) return;
       const s = _strips.get(gid);
       if (!s) return;
-      s.windowSec = clampWin(s.windowSec * (action === 'zoom-in' ? 0.67 : 1.5));
-      updateWindowLabel(gid, s.windowSec);
+      if (act === 'cursors') { toggleCursors(gid); return; }
+      s.windowSec = clampWin(s.windowSec * (act === 'zoom-in' ? 0.67 : 1.5));
+      updateWinLabel(gid, s.windowSec);
     });
+    wrap.appendChild(hdr);
 
     // Canvas-обёртка
-    const canvasWrap = document.createElement('div');
-    canvasWrap.className = 'trend-canvas-wrap';
-    canvasWrap.style.height = h + 'px';
+    const cWrap = document.createElement('div');
+    cWrap.className = 'trend-canvas-wrap';
+    cWrap.style.height = h + 'px';
 
     const canvas = document.createElement('canvas');
     canvas.className = 'trend-canvas';
-    canvasWrap.appendChild(canvas);
+    cWrap.appendChild(canvas);
 
-    // Resizer
-    const resizer = document.createElement('div');
-    resizer.className = 'trend-resizer';
-    canvasWrap.appendChild(resizer);
-    setupResizer(resizer, canvasWrap, group.id);
+    const rsz = document.createElement('div');
+    rsz.className = 'trend-resizer';
+    cWrap.appendChild(rsz);
+    setupResizer(rsz, cWrap, group.id);
+    wrap.appendChild(cWrap);
 
-    wrapper.appendChild(canvasWrap);
+    // Таблица курсоров
+    const curTbl = document.createElement('div');
+    curTbl.className = 'trend-cursor-table';
+    curTbl.style.display = existing?.cursors ? '' : 'none';
+    wrap.appendChild(curTbl);
 
     // Легенда
-    const legend = document.createElement('div');
-    legend.className = 'trend-legend';
-    legend.id = `trend-legend-${group.id}`;
-    wrapper.appendChild(legend);
+    const leg = document.createElement('div');
+    leg.className = 'trend-legend';
+    leg.id = `trend-legend-${group.id}`;
+    wrap.appendChild(leg);
 
-    // Регистрируем полосу
+    // Strip-объект
     const strip = {
-      canvas, ctx: null, legendEl: legend, canvasWrap,
+      canvas, cWrap, legendEl: leg,
       height: h, windowSec: winSec,
       group,
-      yOverrides: existing?.yOverrides || new Map(), // tagId → {min,max} | null=авто
+      yOverrides:   existing?.yOverrides || new Map(),
+      hoveredTagId: null,
+      cursors:      existing?.cursors || null,   // null | [f1, f2], доля окна 0..1
+      cursorTableEl: curTbl,
+      lastTableUpd: 0,
+      view:         null,                      // геометрия последнего кадра
       raf: null
     };
     _strips.set(group.id, strip);
+    if (strip.cursors) setTimeout(() => setCursorBtn(group.id, true));
 
     renderLegend(group.id);
-    setupCanvasInteraction(canvas, group.id);
-
-    return wrapper;
+    setupInteraction(canvas, group.id);
+    return wrap;
   }
 
   // ── Метаданные тегов ─────────────────────────────────────────────────
 
   function resolveTagMeta(tags, group) {
-    tags.forEach((tag, idx) => {
+    tags.forEach((tag, i) => {
       if (_tagMeta.has(tag.id)) return;
+      const dt = (tag.dataType || '').toUpperCase();
       _tagMeta.set(tag.id, {
-        color:    TAG_COLORS[idx % TAG_COLORS.length],
+        color:    TAG_COLORS[i % TAG_COLORS.length],
         label:    shortLabel(tag.displayName || tag.symbolicPath || tag.id),
         fullPath: tag.symbolicPath || tag.id,
-        dataType: tag.dataType || '',
-        isBool:   /^bool$/i.test(tag.dataType || ''),
+        dataType: dt,
+        isBool:   dt === 'BOOL',
+        isHex:    HEX_DT.has(dt),
         hidden:   false
       });
     });
   }
 
-  function shortLabel(path) {
-    return path.replace(/"/g, '').split('.').pop() || path;
-  }
+  function shortLabel(p) { return p.replace(/"/g,'').split('.').pop() || p; }
 
   // ── Легенда ──────────────────────────────────────────────────────────
 
-  function renderLegend(groupId) {
-    const strip   = _strips.get(groupId);
-    const project = window._state?.project;
-    if (!strip || !project) return;
-
-    const group = project.groups.find(g => g.id === groupId);
+  function renderLegend(gid) {
+    const strip = _strips.get(gid);
+    const proj  = window._state?.project;
+    if (!strip || !proj) return;
+    const group = proj.groups.find(g => g.id === gid);
     if (!group) return;
-    const tags = getGroupTags(group, project);
+    const tags  = getGroupTags(group, proj);
 
-    strip.legendEl.innerHTML = tags.map(tag => {
-      const meta = _tagMeta.get(tag.id);
-      if (!meta) return '';
-      return `
-        <div class="trend-legend-item ${meta.hidden ? 'hidden' : ''}"
-             data-tag-id="${tag.id}" data-group-id="${groupId}"
-             title="${escH(meta.fullPath)}">
-          <span class="trend-legend-dot" style="background:${meta.color}"></span>
-          <span class="trend-legend-label">${escH(meta.label)}</span>
-          <span class="trend-legend-value" id="tlv-${tag.id}">—</span>
-        </div>`;
+    strip.legendEl.innerHTML = tags.map(t => {
+      const m = _tagMeta.get(t.id);
+      if (!m) return '';
+      return `<div class="trend-legend-item ${m.hidden?'hidden':''}"
+                   data-tag-id="${t.id}" data-group-id="${gid}"
+                   title="${escH(m.fullPath)}">
+                <span class="trend-legend-dot" id="tld-${t.id}" style="background:${m.color}"></span>
+                <span class="trend-legend-label">${escH(m.label)}</span>
+                <span class="trend-legend-value" id="tlv-${t.id}">—</span>
+              </div>`;
     }).join('');
 
     strip.legendEl.addEventListener('click', e => {
       const item = e.target.closest('.trend-legend-item');
       if (!item) return;
-      const meta = _tagMeta.get(item.dataset.tagId);
-      if (!meta) return;
-      meta.hidden = !meta.hidden;
-      item.classList.toggle('hidden', meta.hidden);
+      const m = _tagMeta.get(item.dataset.tagId);
+      if (!m) return;
+      m.hidden = !m.hidden;
+      item.classList.toggle('hidden', m.hidden);
     });
   }
 
-  function updateLegendValue(tagId, value) {
+  function updateLegendValue(tagId, raw) {
     const el = document.getElementById(`tlv-${tagId}`);
-    if (el) el.textContent = value ?? '—';
+    if (!el) return;
+    const m  = _tagMeta.get(tagId);
+    el.textContent = fmtLegendVal(raw, m?.dataType);
   }
 
-  // ── Взаимодействие с Canvas ───────────────────────────────────────────
-
-  function setupCanvasInteraction(canvas, groupId) {
-
-    // Определяет: курсор над осью Y какого тега (или null = над графиком)
-    function getTagAtX(clientX) {
-      const rect  = canvas.getBoundingClientRect();
-      const scaleX = canvas.width / rect.width;
-      const curX   = (clientX - rect.left) * scaleX;
-      const tags   = getVisibleTags(groupId);
-      const leftMargin = tags.length * AXIS_W;
-      if (curX >= leftMargin) return null;
-      const idx = Math.floor(curX / AXIS_W);
-      return idx < tags.length ? tags[idx] : null;
+  function fmtLegendVal(raw, dt) {
+    if (raw == null) return '—';
+    const DT = (dt || '').toUpperCase();
+    if (HEX_DT.has(DT)) {
+      const n = parseInt(raw);
+      if (!isNaN(n)) return '16#' + n.toString(16).toUpperCase().padStart(HEX_WIDTH[DT] || 4, '0');
     }
+    return String(raw);
+  }
 
-    // ── Курсор мыши ──────────────────────────────────────────────────
+  // ── Зоны взаимодействия ───────────────────────────────────────────────
+
+  // Возвращает { zone: 'yaxis'|'xaxis'|'plot', tag, curX, curY } в px canvas
+  function getZone(canvas, gid, clientX, clientY) {
+    const rect  = canvas.getBoundingClientRect();
+    const sx    = canvas.width  / rect.width;
+    const sy    = canvas.height / rect.height;
+    const cx    = (clientX - rect.left) * sx;
+    const cy    = (clientY - rect.top)  * sy;
+    const tags  = getVisibleTags(gid);
+    const lm    = tags.length * AXIS_W;
+    const pH    = canvas.height - BOTTOM_H;
+
+    if (cx < lm) {
+      const idx = Math.floor(cx / AXIS_W);
+      return { zone: 'yaxis', tag: idx < tags.length ? tags[idx] : null, curX: cx, curY: cy };
+    }
+    if (cy > pH) return { zone: 'xaxis', tag: null, curX: cx, curY: cy };
+
+    const ci = cursorAt(gid, cx);
+    if (ci !== -1) return { zone: 'cursor', tag: null, cursor: ci, curX: cx, curY: cy };
+    return { zone: 'plot', tag: null, curX: cx, curY: cy };
+  }
+
+  // ── Взаимодействие ───────────────────────────────────────────────────
+
+  function setupInteraction(canvas, gid) {
+    const z = e => getZone(canvas, gid, e.clientX, e.clientY);
+
     canvas.addEventListener('mousemove', e => {
-      canvas.style.cursor = getTagAtX(e.clientX) ? 'ns-resize' : 'crosshair';
+      const info = z(e);
+      const s    = _strips.get(gid);
+      if (s) s.hoveredTagId = info.zone === 'yaxis' && info.tag ? info.tag.id : null;
+      canvas.style.cursor =
+        info.zone === 'yaxis'  ? 'ns-resize' :
+        info.zone === 'cursor' ? 'col-resize' :
+        info.zone === 'xaxis'  ? 'ew-resize' : 'crosshair';
     });
+
     canvas.addEventListener('mouseleave', () => {
+      const s = _strips.get(gid);
+      if (s) s.hoveredTagId = null;
       canvas.style.cursor = 'crosshair';
     });
 
-    // ── Колёсико ──────────────────────────────────────────────────────
     canvas.addEventListener('wheel', e => {
       e.preventDefault();
-      const tag = getTagAtX(e.clientX);
-
-      if (tag) {
-        // Масштаб оси Y этого тега
-        const rect   = canvas.getBoundingClientRect();
-        const scaleY = canvas.height / rect.height;
-        const curY   = (e.clientY - rect.top) * scaleY;
-        scaleYAxis(groupId, tag.id, curY, e.deltaY);
+      const info = z(e);
+      const s    = _strips.get(gid);
+      if (!s) return;
+      if (info.zone === 'yaxis' && info.tag) {
+        scaleY(gid, info.tag.id, info.curY, e.deltaY);
       } else {
-        // Масштаб X (время)
-        const s = _strips.get(groupId);
-        if (!s) return;
+        // xaxis или plot — оба масштабируют X
         s.windowSec = clampWin(s.windowSec * (e.deltaY > 0 ? 1.5 : 0.67));
-        updateWindowLabel(groupId, s.windowSec);
+        updateWinLabel(gid, s.windowSec);
       }
     }, { passive: false });
 
-    // ── Drag по оси Y — смещение ──────────────────────────────────────
+    // Drag курсора
     canvas.addEventListener('mousedown', e => {
-      const tag = getTagAtX(e.clientX);
-      if (!tag) return;
-
-      const startY = e.clientY;
-      const { min: r0min, max: r0max } = getCurrentYRange(groupId, tag.id);
-      const range   = r0max - r0min;
-      const strip   = _strips.get(groupId);
-      const plotH   = strip.canvas.height - BOTTOM_H;
-      const rect    = canvas.getBoundingClientRect();
-      const scaleY  = canvas.height / rect.height;
+      const info = z(e);
+      if (info.zone !== 'cursor') return;
+      const s  = _strips.get(gid);
+      const ci = info.cursor;
+      const rect = canvas.getBoundingClientRect();
+      const sX   = canvas.width / rect.width;
 
       const onMove = ev => {
-        const dy        = (ev.clientY - startY) * scaleY;
-        const valueDelt = (dy / plotH) * range;   // вниз → значения растут
-        strip.yOverrides.set(tag.id, {
-          min: r0min + valueDelt,
-          max: r0max + valueDelt
-        });
-        updateOverrideIndicator(groupId, tag.id, true);
+        const v = s.view;
+        if (!v || !s.cursors) return;
+        let x = (ev.clientX - rect.left) * sX;
+        x = Math.max(v.pX, Math.min(v.pX + v.pW, x));
+        s.cursors[ci] = (x - v.pX) / v.pW;
+        s.lastTableUpd = 0;                    // таблицу — сразу
       };
-
       const onUp = () => {
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
       };
-
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);
       e.preventDefault();
     });
 
-    // ── Двойной клик по оси Y — сброс в авто ─────────────────────────
+    // Drag по оси Y
+    canvas.addEventListener('mousedown', e => {
+      const info = z(e);
+      if (info.zone !== 'yaxis' || !info.tag) return;
+      const tagId  = info.tag.id;
+      const startY = e.clientY;
+      const { min: r0, max: r1 } = getCurRange(gid, tagId);
+      const range  = r1 - r0;
+      const s      = _strips.get(gid);
+      const rect   = canvas.getBoundingClientRect();
+      const sY     = canvas.height / rect.height;
+      const pH     = canvas.height - BOTTOM_H;
+
+      const onMove = ev => {
+        const d = (ev.clientY - startY) * sY;
+        const v = (d / pH) * range;
+        s.yOverrides.set(tagId, { min: r0 + v, max: r1 + v });
+        setLock(tagId, true);
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
+
+    // Двойной клик — сброс Y
     canvas.addEventListener('dblclick', e => {
-      const tag = getTagAtX(e.clientX);
-      if (!tag) return;
-      const strip = _strips.get(groupId);
-      strip?.yOverrides.delete(tag.id);
-      updateOverrideIndicator(groupId, tag.id, false);
+      const info = z(e);
+      if (info.zone !== 'yaxis' || !info.tag) return;
+      _strips.get(gid)?.yOverrides.delete(info.tag.id);
+      setLock(info.tag.id, false);
     });
   }
 
-  // ── Масштаб оси Y ────────────────────────────────────────────────────
+  // ── Масштаб Y ────────────────────────────────────────────────────────
 
-  function scaleYAxis(groupId, tagId, cursorY, deltaY) {
-    const strip  = _strips.get(groupId);
-    if (!strip) return;
-
-    const plotH  = strip.canvas.height - BOTTOM_H;
-    const { min, max } = getCurrentYRange(groupId, tagId);
-
-    // Значение под курсором (пивот масштабирования)
-    const pivot  = max - (cursorY / plotH) * (max - min);
-    const factor = deltaY > 0 ? 1.35 : 0.74;
-
-    strip.yOverrides.set(tagId, {
-      min: pivot - (pivot - min) * factor,
-      max: pivot + (max - pivot) * factor
-    });
-    updateOverrideIndicator(groupId, tagId, true);
+  function scaleY(gid, tagId, curY, delta) {
+    const s = _strips.get(gid);
+    if (!s) return;
+    const pH = s.canvas.height - BOTTOM_H;
+    const { min, max } = getCurRange(gid, tagId);
+    const pivot  = max - (curY / pH) * (max - min);
+    const f      = delta > 0 ? 1.35 : 0.74;
+    s.yOverrides.set(tagId, { min: pivot - (pivot - min)*f, max: pivot + (max - pivot)*f });
+    setLock(tagId, true);
   }
 
-  // Возвращает текущий Y-диапазон (override или авто)
-  function getCurrentYRange(groupId, tagId) {
-    const strip    = _strips.get(groupId);
-    const override = strip?.yOverrides?.get(tagId);
-    if (override) return override;
-    return calcAutoRange(groupId, tagId);
+  function getCurRange(gid, tagId) {
+    return _strips.get(gid)?.yOverrides?.get(tagId) || calcAutoRange(gid, tagId);
   }
 
-  // Вычисляет авто-диапазон из видимых данных
-  function calcAutoRange(groupId, tagId) {
-    const meta = _tagMeta.get(tagId);
-    if (meta?.isBool) return { min: -0.15, max: 1.15 };
-
-    const strip  = _strips.get(groupId);
-    const winMs  = (strip?.windowSec || DEFAULT_WIN_SEC) * 1000;
-    const now    = Date.now();
-    const buf    = _buffer.get(tagId) || [];
-    const visible = buf.filter(p => p.ts >= now - winMs && p.ts <= now);
-
-    if (visible.length === 0) return { min: 0, max: 1 };
-
-    let yMin = Infinity, yMax = -Infinity;
-    for (const p of visible) {
-      if (p.value < yMin) yMin = p.value;
-      if (p.value > yMax) yMax = p.value;
-    }
-    if (yMin === yMax) { yMin -= 1; yMax += 1; }
-    const pad = (yMax - yMin) * 0.12;
-    return { min: yMin - pad, max: yMax + pad };
+  function calcAutoRange(gid, tagId) {
+    const m = _tagMeta.get(tagId);
+    if (m?.isBool) return { min: -0.15, max: 1.15 };
+    const s   = _strips.get(gid);
+    const now = Date.now();
+    const buf = (_buffer.get(tagId) || []).filter(p => p.ts >= now - (s?.windowSec||60)*1000);
+    if (!buf.length) return { min: 0, max: 1 };
+    let lo = Infinity, hi = -Infinity;
+    for (const p of buf) { if (p.value < lo) lo = p.value; if (p.value > hi) hi = p.value; }
+    if (lo === hi) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.12;
+    return { min: lo - pad, max: hi + pad };
   }
 
-  // Мини-индикатор блокировки оси (🔒 / пусто) в легенде
-  function updateOverrideIndicator(groupId, tagId, locked) {
-    // Можно добавить визуальный маркер. Пока — изменяем opacity точки в легенде.
-    const item = document.querySelector(
-      `.trend-legend-item[data-tag-id="${tagId}"][data-group-id="${groupId}"] .trend-legend-dot`);
-    if (item) {
-      item.style.boxShadow = locked ? '0 0 0 2px rgba(255,255,255,0.25)' : '';
-      item.title = locked ? 'Масштаб зафиксирован. Двойной клик на ось Y для сброса' : '';
+  function setLock(tagId, on) {
+    const dot = document.getElementById(`tld-${tagId}`);
+    if (dot) {
+      dot.style.boxShadow = on ? '0 0 0 2px rgba(255,255,255,0.3)' : '';
+      dot.title = on ? 'Зафиксировано. Двойной клик на ось Y для сброса' : '';
     }
   }
 
@@ -364,27 +398,19 @@ const Trend = (() => {
   function push(plcSourceId, values) {
     for (const v of values) {
       if (!v.isGood) continue;
-
-      // Bool → 1/0, число → float
-      let numVal;
-      if (v.value === 'True')  numVal = 1;
-      else if (v.value === 'False') numVal = 0;
-      else {
-        numVal = parseFloat(v.value);
-        if (isNaN(numVal)) continue;
-      }
+      let num;
+      if      (v.value === 'True')  num = 1;
+      else if (v.value === 'False') num = 0;
+      else { num = parseFloat(v.value); if (isNaN(num)) continue; }
 
       let buf = _buffer.get(v.tagId);
       if (!buf) { buf = []; _buffer.set(v.tagId, buf); }
-      buf.push({ ts: v.timestampMs, value: numVal });
-
-      // Обрезаем буфер
-      const cutoff = v.timestampMs - BUFFER_MS;
+      buf.push({ ts: v.timestampMs, value: num });
+      const cut = v.timestampMs - BUFFER_MS;
       let lo = 0;
-      while (lo < buf.length && buf[lo].ts < cutoff) lo++;
-      if (lo > 0) buf.splice(0, lo);
+      while (lo < buf.length && buf[lo].ts < cut) lo++;
+      if (lo) buf.splice(0, lo);
 
-      // Значение в легенде
       updateLegendValue(v.tagId, v.value);
     }
   }
@@ -392,302 +418,395 @@ const Trend = (() => {
   // ── Рендеринг ────────────────────────────────────────────────────────
 
   function startRendering() {
-    for (const groupId of _strips.keys()) {
-      scheduleRender(groupId);
-    }
+    for (const id of _strips.keys()) schedule(id);
   }
 
   function stopRendering() {
-    for (const strip of _strips.values()) {
-      if (strip.raf) { cancelAnimationFrame(strip.raf); strip.raf = null; }
-    }
+    for (const s of _strips.values()) { if (s.raf) { cancelAnimationFrame(s.raf); s.raf = null; } }
   }
 
-  function scheduleRender(groupId) {
-    const strip = _strips.get(groupId);
-    if (!strip) return;
-    strip.raf = requestAnimationFrame(() => {
-      renderStrip(groupId);
-      if (_visible) scheduleRender(groupId);
-    });
+  function schedule(gid) {
+    const s = _strips.get(gid);
+    if (!s) return;
+    s.raf = requestAnimationFrame(() => { renderStrip(gid); if (_visible) schedule(gid); });
   }
 
-  function renderStrip(groupId) {
-    const strip   = _strips.get(groupId);
-    const project = window._state?.project;
-    if (!strip || !project) return;
+  function renderStrip(gid) {
+    const s    = _strips.get(gid);
+    const proj = window._state?.project;
+    if (!s || !proj) return;
 
-    const canvas = strip.canvas;
-    const wrap   = strip.canvasWrap;
-    const W = wrap.clientWidth;
-    const H = wrap.clientHeight - 4;
+    const cv = s.canvas;
+    const W  = s.cWrap.clientWidth;
+    const H  = s.cWrap.clientHeight - 4;
     if (W <= 0 || H <= 0) return;
-    if (canvas.width !== W || canvas.height !== H) {
-      canvas.width  = W;
-      canvas.height = H;
-    }
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
 
-    const ctx  = canvas.getContext('2d');
-    const group = project.groups.find(g => g.id === groupId);
+    const ctx   = cv.getContext('2d');
+    const group = proj.groups.find(g => g.id === gid);
     if (!group) return;
 
-    const visibleTags = getVisibleTags(groupId);
+    const tags  = getVisibleTags(gid);
+    const winMs = s.windowSec * 1000;
+    const now   = Date.now();
+    const vEnd  = now;
+    const vStart = now - winMs;
+    const lm    = tags.length * AXIS_W;
+    const pX    = lm;
+    const pW    = W - lm - 4;
+    const pH    = H - BOTTOM_H;
 
-    // Временное окно
-    const winMs     = strip.windowSec * 1000;
-    const viewEnd   = Date.now();
-    const viewStart = viewEnd - winMs;
-
-    // Отступы
-    const leftMargin = visibleTags.length * AXIS_W;
-    const plotX  = leftMargin;
-    const plotW  = W - leftMargin - 4;
-    const plotH  = H - BOTTOM_H;
-
-    // ── Фон
     ctx.fillStyle = '#0d1117';
     ctx.fillRect(0, 0, W, H);
 
-    // ── Сетка
-    drawGrid(ctx, plotX, 0, plotW, plotH, viewStart, viewEnd);
+    drawGrid(ctx, pX, 0, pW, pH, vStart, vEnd);
 
-    // ── Линии тегов
-    visibleTags.forEach((tag, idx) => {
-      const meta = _tagMeta.get(tag.id);
-      if (!meta) return;
-      const buf = _buffer.get(tag.id) || [];
+    tags.forEach((tag, idx) => {
+      const m      = _tagMeta.get(tag.id);
+      if (!m) return;
+      const buf    = _buffer.get(tag.id) || [];
+      const pts    = buf.filter(p => p.ts >= vStart - 2000 && p.ts <= vEnd);
+      const active = s.hoveredTagId === tag.id;
+      const locked = s.yOverrides.has(tag.id);
+      const { min: yMin, max: yMax } = getCurRange(gid, tag.id);
 
-      // Точки в видимом диапазоне + немного слева для непрерывности
-      const pts = buf.filter(p => p.ts >= viewStart - 2000 && p.ts <= viewEnd);
-      if (pts.length < 1) {
-        // Ось Y рисуем всегда
-        const { min, max } = getCurrentYRange(groupId, tag.id);
-        drawYAxis(ctx, idx * AXIS_W, 0, AXIS_W, plotH, min, max, meta.color,
-                  strip.yOverrides.has(tag.id));
-        return;
-      }
+      drawYAxis(ctx, idx * AXIS_W, 0, AXIS_W, pH, yMin, yMax, m.color, locked, active);
 
-      const { min: yMin, max: yMax } = getCurrentYRange(groupId, tag.id);
+      if (!pts.length) return;
 
-      // Ось Y
-      drawYAxis(ctx, idx * AXIS_W, 0, AXIS_W, plotH, yMin, yMax, meta.color,
-                strip.yOverrides.has(tag.id));
+      const toX = ts  => pX + ((ts - vStart) / winMs) * pW;
+      const toY = val => pH - Math.max(0, Math.min(1, (val - yMin)/(yMax - yMin))) * pH;
 
-      // Маппинг
-      const toX = ts  => plotX + ((ts  - viewStart) / winMs) * plotW;
-      const toY = val => plotH - Math.max(0, Math.min(1, (val - yMin) / (yMax - yMin))) * plotH;
-
-      // Рисуем с clip
       ctx.save();
-      ctx.beginPath();
-      ctx.rect(plotX, 0, plotW, plotH);
-      ctx.clip();
-
-      ctx.strokeStyle = meta.color;
-      ctx.lineWidth   = 1.5;
+      ctx.beginPath(); ctx.rect(pX, 0, pW, pH); ctx.clip();
+      ctx.strokeStyle = m.color;
+      ctx.lineWidth   = active ? 2.5 : 1.5;
       ctx.lineJoin    = 'round';
       ctx.beginPath();
 
-      let prevY = null;
-      let first  = true;
-
+      let pY = null, first = true;
       for (const p of pts) {
-        const x = toX(p.ts);
-        const y = toY(p.value);
+        const x = toX(p.ts), y = toY(p.value);
         if (first) { ctx.moveTo(x, y); first = false; }
-        else if (meta.isBool) {
-          ctx.lineTo(x, prevY);  // горизонталь на старом уровне
-          ctx.lineTo(x, y);      // вертикаль
-        } else {
-          ctx.lineTo(x, y);
-        }
-        prevY = y;
+        else if (m.isBool) { ctx.lineTo(x, pY); ctx.lineTo(x, y); }
+        else ctx.lineTo(x, y);
+        pY = y;
       }
       ctx.stroke();
       ctx.restore();
     });
 
-    // ── Ось X
-    drawXAxis(ctx, plotX, plotH, plotW, BOTTOM_H, viewStart, viewEnd, strip.windowSec);
-  }
+    drawXAxis(ctx, pX, pH, pW, BOTTOM_H, vStart, vEnd, s.windowSec);
 
-  // ── Рисование осей и сетки ────────────────────────────────────────────
-
-  function drawGrid(ctx, x, y, w, h, viewStart, viewEnd) {
-    // Горизонтальные
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth   = 1;
-    for (let i = 1; i < 5; i++) {
-      const py = y + (i / 5) * h;
-      ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x + w, py); ctx.stroke();
-    }
-    // Вертикальные
-    const stepMs  = gridStep(viewEnd - viewStart);
-    const firstTs = Math.ceil(viewStart / stepMs) * stepMs;
-    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
-    for (let ts = firstTs; ts <= viewEnd; ts += stepMs) {
-      const px = x + ((ts - viewStart) / (viewEnd - viewStart)) * w;
-      ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px, y + h); ctx.stroke();
+    s.view = { vStart, winMs, pX, pW, pH };
+    if (s.cursors) {
+      drawCursors(ctx, gid, tags);
+      if (now - s.lastTableUpd >= TABLE_UPDATE_MS) {
+        s.lastTableUpd = now;
+        renderCursorTable(gid, tags);
+      }
     }
   }
 
-  function drawYAxis(ctx, x, y, w, h, yMin, yMax, color, locked) {
-    // Фон оси
-    ctx.fillStyle = locked ? 'rgba(30,20,10,0.92)' : 'rgba(13,17,23,0.92)';
-    ctx.fillRect(x, y, w - 1, h);
+  // ── Курсоры ──────────────────────────────────────────────────────────
 
-    // Вертикальная линия
-    ctx.strokeStyle = color + (locked ? 'cc' : '60');
-    ctx.lineWidth   = locked ? 1.5 : 1;
-    ctx.beginPath();
-    ctx.moveTo(x + w - 1, y);
-    ctx.lineTo(x + w - 1, y + h);
-    ctx.stroke();
+  function toggleCursors(gid) {
+    const s = _strips.get(gid);
+    if (!s) return;
+    if (s.cursors) {
+      s.cursors = null;
+    } else {
+      s.cursors = [1/3, 2/3];
+    }
+    s.lastTableUpd = 0;
+    s.cursorTableEl.style.display = s.cursors ? '' : 'none';
+    if (!s.cursors) s.cursorTableEl.innerHTML = '';
+    setCursorBtn(gid, !!s.cursors);
+  }
 
-    // Метки и засечки
-    ctx.fillStyle  = color;
-    ctx.font       = '9px "Courier New", monospace';
-    ctx.textAlign  = 'right';
+  function setCursorBtn(gid, on) {
+    document.getElementById(`trend-cur-btn-${gid}`)?.classList.toggle('active', on);
+  }
 
-    const ticks = 4;
-    for (let i = 0; i <= ticks; i++) {
-      const v  = yMin + (yMax - yMin) * (1 - i / ticks);
-      const py = y + (i / ticks) * h;
-      ctx.fillText(fmtVal(v), x + w - 4, py + 3);
-      ctx.strokeStyle = color + '30';
+  // Индекс курсора под X (px canvas) или -1
+  function cursorAt(gid, cx) {
+    const s = _strips.get(gid);
+    const v = s?.view;
+    if (!s?.cursors || !v) return -1;
+    let best = -1, bestD = CURSOR_HIT_PX + 1;
+    s.cursors.forEach((f, i) => {
+      const d = Math.abs(v.pX + f * v.pW - cx);
+      if (d < bestD) { bestD = d; best = i; }
+    });
+    return bestD <= CURSOR_HIT_PX ? best : -1;
+  }
+
+  // Последний отсчёт с ts ≤ t (бинарный поиск), либо null
+  function valueAt(tagId, t) {
+    const buf = _buffer.get(tagId);
+    if (!buf || !buf.length || buf[0].ts > t) return null;
+    let lo = 0, hi = buf.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (buf[mid].ts <= t) lo = mid; else hi = mid - 1;
+    }
+    return buf[lo].value;
+  }
+
+  function drawCursors(ctx, gid, tags) {
+    const s = _strips.get(gid);
+    const { vStart, winMs, pX, pW, pH } = s.view;
+
+    s.cursors.forEach((f, ci) => {
+      const ts = vStart + f * winMs;
+      const x  = pX + f * pW;
+      const col = CURSOR_COLORS[ci];
+
+      ctx.save();
+      ctx.strokeStyle = col;
       ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.moveTo(x + w - 5, py);
-      ctx.lineTo(x + w - 1, py);
-      ctx.stroke();
-    }
+      ctx.setLineDash(ci === 0 ? [] : [5, 3]);
+      ctx.beginPath(); ctx.moveTo(x + 0.5, 0); ctx.lineTo(x + 0.5, pH); ctx.stroke();
+      ctx.setLineDash([]);
 
-    // Иконка замка если override
-    if (locked) {
-      ctx.fillStyle = color + 'aa';
-      ctx.font      = '8px sans-serif';
+      // Маркеры пересечения с линиями тегов
+      tags.forEach(tag => {
+        const val = valueAt(tag.id, ts);
+        if (val == null) return;
+        const { min, max } = getCurRange(gid, tag.id);
+        const y = pH - Math.max(0, Math.min(1, (val - min) / (max - min))) * pH;
+        ctx.fillStyle   = _tagMeta.get(tag.id)?.color || col;
+        ctx.strokeStyle = '#0d1117';
+        ctx.lineWidth   = 1.5;
+        ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      });
+
+      // Ярлык "C1"/"C2" сверху и время на оси X
+      ctx.font = FONT_NORM;
+      const lbl = 'C' + (ci + 1);
+      const lw  = ctx.measureText(lbl).width + 8;
+      const lx  = Math.min(x + 2, pX + pW - lw);
+      ctx.fillStyle = col;
+      ctx.fillRect(lx, 0, lw, 15);
+      ctx.fillStyle = '#0d1117';
       ctx.textAlign = 'left';
-      ctx.fillText('🔒', x + 2, y + 11);
-    }
+      ctx.fillText(lbl, lx + 4, 11);
 
+      const tl  = fmtTimeMs(ts);
+      const tw  = ctx.measureText(tl).width + 8;
+      const tx  = Math.max(pX, Math.min(x - tw / 2, pX + pW - tw));
+      ctx.fillStyle = col;
+      ctx.fillRect(tx, pH + 2, tw, BOTTOM_H - 4);
+      ctx.fillStyle = '#0d1117';
+      ctx.fillText(tl, tx + 4, pH + 17);
+      ctx.restore();
+    });
+  }
+
+  function renderCursorTable(gid, tags) {
+    const s = _strips.get(gid);
+    const v   = s.view;
+    if (!v) return;
+    const [t1, t2] = s.cursors.map(f => v.vStart + f * v.winMs);
+    const dT  = t2 - t1;
+
+    const rows = tags.map(tag => {
+      const m  = _tagMeta.get(tag.id);
+      const a  = valueAt(tag.id, t1);
+      const b  = valueAt(tag.id, t2);
+      const d  = (a != null && b != null) ? b - a : null;
+      return `<tr>
+        <td><span class="trend-legend-dot" style="background:${m.color}"></span>${escH(m.label)}</td>
+        <td>${fmtCurVal(a, m)}</td>
+        <td>${fmtCurVal(b, m)}</td>
+        <td>${d == null ? '—' : fmtDelta(d, m)}</td>
+      </tr>`;
+    }).join('');
+
+    s.cursorTableEl.innerHTML = `
+      <table>
+        <thead><tr>
+          <th></th>
+          <th style="color:${CURSOR_COLORS[0]}">C1 ${fmtTimeMs(t1)}</th>
+          <th style="color:${CURSOR_COLORS[1]}">C2 ${fmtTimeMs(t2)}</th>
+          <th>∆ = ${fmtDur(dT)}</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  function fmtCurVal(v, m) {
+    if (v == null) return '—';
+    if (m.isBool)  return v ? 'TRUE' : 'FALSE';
+    if (m.isHex)   return fmtLegendVal(v, m.dataType);
+    return fmtNum(v);
+  }
+
+  function fmtDelta(d, m) {
+    if (m.isBool) return d === 0 ? '=' : (d > 0 ? '↑' : '↓');
+    const sign = d > 0 ? '+' : '';
+    return sign + fmtNum(d);                       // hex-типы — дельта десятичная
+  }
+
+  function fmtNum(v) {
+    if (Number.isInteger(v)) return String(v);
+    const a = Math.abs(v);
+    return a >= 1000 ? v.toFixed(1) : a >= 1 ? v.toFixed(3) : v.toPrecision(4);
+  }
+
+  function fmtTimeMs(ts) {
+    const d = new Date(ts);
+    return d.toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit', second:'2-digit' })
+         + '.' + String(d.getMilliseconds()).padStart(3, '0');
+  }
+
+  function fmtDur(ms) {
+    const sign = ms < 0 ? '−' : '';
+    ms = Math.abs(ms);
+    if (ms < 1000)  return sign + Math.round(ms) + ' мс';
+    if (ms < 60000) return sign + (ms / 1000).toFixed(3) + ' с';
+    const m = Math.floor(ms / 60000);
+    return sign + m + ' мин ' + ((ms % 60000) / 1000).toFixed(1) + ' с';
+  }
+
+  // ── Рисование ────────────────────────────────────────────────────────
+
+  function drawGrid(ctx, x, y, w, h, vS, vE) {
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    for (let i = 1; i < 5; i++) {
+      const py = y + i/5 * h;
+      ctx.beginPath(); ctx.moveTo(x, py); ctx.lineTo(x+w, py); ctx.stroke();
+    }
+    const step = gridStep(vE - vS);
+    const first = Math.ceil(vS / step) * step;
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    for (let ts = first; ts <= vE; ts += step) {
+      const px = x + (ts - vS)/(vE - vS) * w;
+      ctx.beginPath(); ctx.moveTo(px, y); ctx.lineTo(px, y+h); ctx.stroke();
+    }
+  }
+
+  function drawYAxis(ctx, x, y, w, h, yMin, yMax, color, locked, active) {
+    ctx.fillStyle = locked ? 'rgba(28,22,10,0.95)'
+                  : active ? 'rgba(25,30,40,0.97)'
+                           : 'rgba(13,17,23,0.93)';
+    ctx.fillRect(x, y, w-1, h);
+
+    ctx.strokeStyle = active ? color : color + '50';
+    ctx.lineWidth   = active ? 2.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x+w-1, y); ctx.lineTo(x+w-1, y+h); ctx.stroke();
+
+    ctx.font      = active ? FONT_ACTIVE : FONT_NORM;
+    ctx.fillStyle = active ? color : color + 'cc';
+    ctx.textAlign = 'right';
+
+    for (let i = 0; i <= 4; i++) {
+      const v  = yMin + (yMax - yMin) * (1 - i/4);
+      const py = y + i/4 * h;
+      ctx.fillText(fmtVal(v), x + w - 5, Math.max(y + 11, Math.min(y + h - 3, py + 4)));
+      ctx.strokeStyle = color + '25'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x+w-5, py); ctx.lineTo(x+w-1, py); ctx.stroke();
+    }
+    if (locked) {
+      ctx.font = '9px sans-serif'; ctx.fillStyle = color + '99'; ctx.textAlign = 'left';
+      ctx.fillText('🔒', x+2, y+12);
+    }
     ctx.textAlign = 'left';
   }
 
-  function drawXAxis(ctx, x, y, w, h, viewStart, viewEnd, winSec) {
-    ctx.fillStyle = '#0d1117';
+  function drawXAxis(ctx, x, y, w, h, vS, vE, winSec) {
+    ctx.fillStyle = '#0a0e15';
     ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = 'rgba(255,255,255,0.1)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x+w, y); ctx.stroke();
 
-    const stepMs  = gridStep(viewEnd - viewStart);
-    const firstTs = Math.ceil(viewStart / stepMs) * stepMs;
-
-    ctx.fillStyle  = 'rgba(255,255,255,0.35)';
-    ctx.font       = '9px "Courier New", monospace';
-    ctx.textAlign  = 'center';
-
-    for (let ts = firstTs; ts <= viewEnd; ts += stepMs) {
-      const px  = x + ((ts - viewStart) / (viewEnd - viewStart)) * w;
-      const d   = new Date(ts);
-      const lbl = winSec <= 120
-        ? d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-        : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-      ctx.fillText(lbl, px, y + 14);
+    const step  = gridStep(vE - vS);
+    const first = Math.ceil(vS / step) * step;
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.font      = FONT_NORM;
+    ctx.textAlign = 'center';
+    for (let ts = first; ts <= vE; ts += step) {
+      const px = x + (ts - vS)/(vE - vS) * w;
+      const d  = new Date(ts);
+      const lb = winSec <= 120
+        ? d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
+        : d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+      ctx.fillText(lb, px, y + 17);
     }
     ctx.textAlign = 'left';
   }
 
-  // ── Вспомогательные ──────────────────────────────────────────────────
+  // ── Утилиты ──────────────────────────────────────────────────────────
 
   function getGroupTags(group, project) {
-    return (group.tagIds || [])
-      .map(tid => project?.tags?.find(t => t.id === tid))
-      .filter(Boolean);
+    return (group?.tagIds || []).map(id => project?.tags?.find(t => t.id === id)).filter(Boolean);
   }
 
-  // Видимые теги полосы (enabled + не hidden в легенде)
-  function getVisibleTags(groupId) {
-    const project = window._state?.project;
-    const strip   = _strips.get(groupId);
-    if (!project || !strip) return [];
-    const group   = project.groups.find(g => g.id === groupId);
+  function getVisibleTags(gid) {
+    const proj  = window._state?.project;
+    const strip = _strips.get(gid);
+    if (!proj || !strip) return [];
+    const group = proj.groups.find(g => g.id === gid);
     if (!group) return [];
-    return getGroupTags(group, project).filter(t => {
+    return getGroupTags(group, proj).filter(t => {
       if (t.isEnabled === false) return false;
       const m = _tagMeta.get(t.id);
       return m && !m.hidden;
     });
   }
 
-  function gridStep(durationMs) {
-    const steps = [200, 500, 1000, 2000, 5000, 10000, 15000, 30000, 60000, 120000, 300000];
-    for (const s of steps) { if (durationMs / s <= 8) return s; }
+  function gridStep(dur) {
+    for (const s of [200,500,1000,2000,5000,10000,15000,30000,60000,120000,300000])
+      if (dur/s <= 8) return s;
     return 60000;
   }
 
   function fmtVal(v) {
     const a = Math.abs(v);
-    if (a === 0)   return '0';
-    if (a >= 10000) return (v / 1000).toFixed(0) + 'k';
-    if (a >= 1000)  return (v / 1000).toFixed(1) + 'k';
-    if (a >= 100)   return Math.round(v).toString();
-    if (a >= 10)    return v.toFixed(1);
+    if (!a)     return '0';
+    if (a>=1e4) return (v/1000).toFixed(0)+'k';
+    if (a>=1e3) return (v/1000).toFixed(1)+'k';
+    if (a>=100) return Math.round(v)+'';
+    if (a>=10)  return v.toFixed(1);
     return v.toFixed(2);
   }
 
-  function fmtWin(sec) {
-    return sec >= 60 ? Math.round(sec / 60) + 'м' : sec + 'с';
-  }
-
-  function clampWin(sec) {
-    return Math.max(5, Math.min(300, sec));
-  }
-
-  function updateWindowLabel(groupId, sec) {
-    const el = document.getElementById(`trend-win-${groupId}`);
-    if (el) el.textContent = fmtWin(sec);
+  function fmtWin(s) { return s >= 60 ? Math.round(s/60)+'м' : s+'с'; }
+  function clampWin(s) { return Math.max(5, Math.min(300, s)); }
+  function updateWinLabel(gid, s) {
+    const el = document.getElementById(`trend-win-${gid}`);
+    if (el) el.textContent = fmtWin(s);
   }
 
   function escH(s) {
-    return String(s || '')
-      .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')
       .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   }
 
-  // ── Resizer полосы ────────────────────────────────────────────────────
-
-  function setupResizer(resizerEl, wrapEl, groupId) {
-    let startY, startH;
-    resizerEl.addEventListener('mousedown', e => {
-      startY = e.clientY;
-      startH = wrapEl.clientHeight;
-      const onMove = ev => {
-        const newH = Math.max(MIN_STRIP_H, startH + ev.clientY - startY);
-        wrapEl.style.height = newH + 'px';
-        const s = _strips.get(groupId);
-        if (s) s.height = newH;
+  function setupResizer(el, wrap, gid) {
+    let sy, sh;
+    el.addEventListener('mousedown', e => {
+      sy = e.clientY; sh = wrap.clientHeight;
+      const mv = ev => {
+        const h = Math.max(MIN_STRIP_H, sh + ev.clientY - sy);
+        wrap.style.height = h + 'px';
+        const s = _strips.get(gid); if (s) s.height = h;
       };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
-      };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      const up = () => { document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); };
+      document.addEventListener('mousemove', mv);
+      document.addEventListener('mouseup', up);
       e.preventDefault();
     });
   }
 
   // ── Публичный API ─────────────────────────────────────────────────────
 
-  function show() {
-    _visible = true;
-    init();
-    startRendering();
-  }
-
-  function hide() {
-    _visible = false;
-    stopRendering();
-  }
-
-  return { show, hide, push, rebuild };
+  return {
+    show()  { _visible = true;  init(); startRendering(); },
+    hide()  { _visible = false; stopRendering(); },
+    push,
+    rebuild
+  };
 
 })();
