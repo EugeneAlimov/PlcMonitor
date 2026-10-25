@@ -11,6 +11,10 @@
 // Активная ось Y (под курсором) выделяется жирной линией и крупным шрифтом.
 // WORD/BYTE/DWORD/LWORD отображаются в легенде как 16#XXXX.
 //
+// Какие группы показывать — панель-переключатель над полосами и ✕ в шапке.
+// По умолчанию новая группа на тренд не выводится. Выбор хранится в
+// localStorage отдельно для каждого проекта.
+//
 // Курсоры (кнопка ⌖ в шапке полосы):
 //   Две вертикальные линии. Позиция хранится как доля окна (0..1),
 //   т.е. в живом режиме линии стоят на месте экрана, а данные текут
@@ -53,6 +57,28 @@ const Trend = (() => {
 
   let _visible   = false;
   let _container = null;
+  let _shown     = null;         // Set<groupId> — какие группы на тренде
+
+  // ── Выбор групп ──────────────────────────────────────────────────────
+
+  function storageKey() {
+    return 'plcmon.trend.shown.' + (window._state?.project?.name || '');
+  }
+
+  function loadShown() {
+    try { _shown = new Set(JSON.parse(localStorage.getItem(storageKey()) || '[]')); }
+    catch { _shown = new Set(); }
+  }
+
+  function saveShown() {
+    try { localStorage.setItem(storageKey(), JSON.stringify([..._shown])); } catch {}
+  }
+
+  function setShown(gid, on) {
+    if (on) _shown.add(gid); else _shown.delete(gid);
+    saveShown();
+    rebuild();
+  }
 
   // ── Инициализация ────────────────────────────────────────────────────
 
@@ -64,15 +90,53 @@ const Trend = (() => {
 
   function rebuild() {
     if (!_container) return;
+    stopRendering();
+    if (!_shown) loadShown();
+
     const groups = window._state?.project?.groups || [];
     if (!groups.length) {
+      _strips.clear();
       _container.innerHTML = '<div class="trend-empty">Нет групп. Создайте группу и добавьте теги.</div>';
       return;
     }
-    for (const [id, s] of _strips)
-      if (!groups.find(g => g.id === id)) { s.raf && cancelAnimationFrame(s.raf); _strips.delete(id); }
+
+    // Чистим выбор от удалённых групп
+    for (const id of [..._shown])
+      if (!groups.find(g => g.id === id)) _shown.delete(id);
+
+    // Полосы скрытых/удалённых групп выбрасываем
+    for (const id of [..._strips.keys()])
+      if (!_shown.has(id)) _strips.delete(id);
+
     _container.innerHTML = '';
-    groups.forEach(g => _container.appendChild(buildStrip(g)));
+    _container.appendChild(buildPicker(groups));
+
+    const shownGroups = groups.filter(g => _shown.has(g.id));
+    if (!shownGroups.length) {
+      const e = document.createElement('div');
+      e.className = 'trend-empty';
+      e.textContent = 'Выберите группы для отображения на панели выше';
+      _container.appendChild(e);
+    }
+    shownGroups.forEach(g => _container.appendChild(buildStrip(g)));
+
+    if (_visible) startRendering();
+  }
+
+  function buildPicker(groups) {
+    const bar = document.createElement('div');
+    bar.className = 'trend-picker';
+    bar.innerHTML = '<span class="trend-picker-label">На тренде:</span>' +
+      groups.map(g => `
+        <span class="trend-chip ${_shown.has(g.id) ? 'on' : ''}" data-gid="${g.id}"
+              title="${_shown.has(g.id) ? 'Убрать с тренда' : 'Показать на тренде'}">
+          ${escH(g.name)} <span class="trend-chip-count">${(g.tagIds || []).length}</span>
+        </span>`).join('');
+    bar.addEventListener('click', e => {
+      const chip = e.target.closest('.trend-chip');
+      if (chip) setShown(chip.dataset.gid, !_shown.has(chip.dataset.gid));
+    });
+    return bar;
   }
 
   // ── Построение полосы ─────────────────────────────────────────────────
@@ -102,6 +166,7 @@ const Trend = (() => {
         <span class="trend-ctrl" data-action="zoom-in"  data-gid="${group.id}" title="Уменьшить окно">⊕</span>
         <span class="trend-ctrl" data-action="zoom-out" data-gid="${group.id}" title="Увеличить окно">⊖</span>
         <span class="trend-win-label" id="trend-win-${group.id}">${fmtWin(winSec)}</span>
+        <span class="trend-ctrl trend-close" data-action="close" data-gid="${group.id}" title="Убрать с тренда">✕</span>
       </div>`;
     hdr.addEventListener('click', e => {
       const act = e.target.dataset.action;
@@ -110,6 +175,7 @@ const Trend = (() => {
       const s = _strips.get(gid);
       if (!s) return;
       if (act === 'cursors') { toggleCursors(gid); return; }
+      if (act === 'close')   { setShown(gid, false); return; }
       s.windowSec = clampWin(s.windowSec * (act === 'zoom-in' ? 0.67 : 1.5));
       updateWinLabel(gid, s.windowSec);
     });
@@ -803,7 +869,7 @@ const Trend = (() => {
   // ── Публичный API ─────────────────────────────────────────────────────
 
   return {
-    show()  { _visible = true;  init(); startRendering(); },
+    show()  { _visible = true;  _shown = null; init(); },
     hide()  { _visible = false; stopRendering(); },
     push,
     rebuild

@@ -322,6 +322,7 @@ function showGroupView(groupId) {
         <div style="display:flex;gap:6px;">
           <button class="btn btn-ghost btn-sm" onclick="addStagingToGroup('${group.id}')">+ Добавить из набора</button>
           <button class="btn btn-ghost btn-sm" onclick="LiveData.toggleGroup('${group.id}')">▶ Запустить</button>
+          <button class="btn btn-ghost btn-sm" title="Удалить группу" onclick="deleteGroup('${group.id}')">🗑</button>
         </div>
       </div>
       ${tags.length === 0 ? `
@@ -384,6 +385,29 @@ async function removeTagFromGroup(groupId, tagId) {
   state.groups  = d.project.groups || [];
   renderGroupsList();
   showGroupView(groupId);
+}
+
+async function deleteGroup(groupId) {
+  const group = state.groups.find(g => g.id === groupId);
+  if (!group) return;
+  if (!confirm(`Удалить группу "${group.name}"?\nТеги, которые не входят в другие группы, тоже будут удалены.`)) return;
+
+  const res = await fetch(`${API}/api/project/group/${groupId}`, { method: 'DELETE' });
+  if (!res.ok) { showToast('Не удалось удалить группу', 'error'); return; }
+
+  const d = await (await fetch(`${API}/api/project`)).json();
+  state.project = d.project;
+  state.groups  = d.project.groups || [];
+  if (state.activeGroupId === groupId) state.activeGroupId = null;
+
+  renderGroupsList();
+  document.getElementById('group-view-container').innerHTML = `
+    <div class="empty-right">
+      <div class="empty-right-icon">📊</div>
+      <div>Выберите группу из списка слева</div>
+    </div>`;
+  if (typeof Trend !== 'undefined') Trend.rebuild();
+  showToast(`Группа "${group.name}" удалена. Не забудьте сохранить проект`, '');
 }
 
 async function toggleTag(tagId, el) {

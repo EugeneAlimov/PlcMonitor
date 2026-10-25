@@ -123,6 +123,21 @@ namespace PlcMonitor.Monitoring
             return group;
         }
 
+        /// <summary>
+        /// Удаляет группу. Теги, которые больше не входят ни в одну группу,
+        /// удаляются из проекта (вне групп они всё равно не опрашиваются).
+        /// </summary>
+        public bool DeleteGroup(string groupId)
+        {
+            var group = Groups.FirstOrDefault(g => g.Id == groupId);
+            if (group == null) return false;
+            Groups.Remove(group);
+            Tags.RemoveAll(t => group.TagIds.Contains(t.Id)
+                             && !Groups.Any(g => g.TagIds.Contains(t.Id)));
+            Modified = DateTime.UtcNow;
+            return true;
+        }
+
         public void AddTagToGroup(string tagId, string groupId)
         {
             var group = Groups.FirstOrDefault(g => g.Id == groupId);

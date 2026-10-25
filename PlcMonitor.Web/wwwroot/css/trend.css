@@ -29,6 +29,7 @@
 .trend-strip {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;          /* иначе контейнер сжимает полосы и обрезает ось X, таблицу и ресайзер */
   background: var(--bg2, #161b22);
   border: 1px solid var(--border1, #21262d);
   border-radius: 6px;
@@ -234,3 +235,48 @@
   margin-right: 6px;
   vertical-align: middle;
 }
+
+/* ── Выбор групп для тренда ────────────────────────── */
+.trend-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 0 10px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.trend-picker-label {
+  font-size: 11px;
+  color: var(--text3, #555);
+  margin-right: 2px;
+}
+
+.trend-chip {
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 12px;
+  border: 1px solid var(--border1, #21262d);
+  color: var(--text2, #8b949e);
+  background: var(--bg2, #161b22);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.trend-chip:hover { border-color: var(--accent, #388bfd); }
+
+.trend-chip.on {
+  background: rgba(56, 139, 253, 0.15);
+  border-color: var(--accent, #388bfd);
+  color: var(--text1, #e6edf3);
+}
+
+.trend-chip-count {
+  font-family: monospace;
+  font-size: 10px;
+  opacity: 0.6;
+  margin-left: 3px;
+}
+
+.trend-close:hover { color: #f87171; }

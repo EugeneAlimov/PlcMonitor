@@ -137,6 +137,13 @@ namespace PlcMonitor.Web.Controllers
             return Ok(tag);
         }
 
+        [HttpDelete("group/{groupId}")]
+        public IActionResult DeleteGroup(string groupId)
+        {
+            if (!_project.IsLoaded) return BadRequest("Проект не открыт");
+            return _project.Current.DeleteGroup(groupId) ? Ok() : NotFound();
+        }
+
         [HttpPost("group/{groupId}/tag/{tagId}")]
         public IActionResult AddTagToGroup(string groupId, string tagId)
         {
