@@ -1,5 +1,5 @@
 // ══════════════════════════════════════════════════════════════════════
-// trend.js v4
+// trend.js v5
 //
 // Зоны взаимодействия:
 //   Над осью Y тега  → колёсико: масштаб этой оси Y
@@ -15,10 +15,16 @@
 // По умолчанию новая группа на тренд не выводится. Выбор хранится в
 // localStorage отдельно для каждого проекта.
 //
+// Пауза (кнопка ⏸ в шапке, Пробел — все полосы разом):
+//   Время полосы замирает, данные продолжают писаться в буфер (5 мин).
+//   Drag по графику — прокрутка по времени (в живом режиме drag тоже
+//   ставит паузу). Колёсико — масштаб вокруг точки под мышью.
+//   Курсоры на паузе привязаны к абсолютному времени.
+//
 // Курсоры (кнопка ⌖ в шапке полосы):
-//   Две вертикальные линии. Позиция хранится как доля окна (0..1),
-//   т.е. в живом режиме линии стоят на месте экрана, а данные текут
-//   под ними. Drag за линию — перемещение.
+//   Две вертикальные линии. В живом режиме позиция — доля окна (0..1),
+//   линии стоят на месте экрана, данные текут под ними. На паузе —
+//   абсолютное время. Drag за линию — перемещение.
 //   Таблица под графиком: значения тегов на C1/C2, ∆Y, ∆T.
 //   Значение на курсоре = последний отсчёт ≤ времени курсора
 //   (sample & hold — честно для опрашиваемых данных, без интерполяции).
@@ -162,6 +168,8 @@ const Trend = (() => {
         <span class="trend-interval">${group.pollIntervalMs} мс</span>
       </div>
       <div class="trend-strip-controls">
+        <span class="trend-paused-badge" id="trend-paused-${group.id}" style="display:none">ПАУЗА</span>
+        <span class="trend-ctrl" data-action="pause"    data-gid="${group.id}" id="trend-pause-btn-${group.id}" title="Пауза (Пробел — все полосы)">⏸</span>
         <span class="trend-ctrl" data-action="cursors"  data-gid="${group.id}" id="trend-cur-btn-${group.id}" title="Курсоры">⌖</span>
         <span class="trend-ctrl" data-action="zoom-in"  data-gid="${group.id}" title="Уменьшить окно">⊕</span>
         <span class="trend-ctrl" data-action="zoom-out" data-gid="${group.id}" title="Увеличить окно">⊖</span>
@@ -175,9 +183,9 @@ const Trend = (() => {
       const s = _strips.get(gid);
       if (!s) return;
       if (act === 'cursors') { toggleCursors(gid); return; }
+      if (act === 'pause')   { setPaused(gid, !s.paused); return; }
       if (act === 'close')   { setShown(gid, false); return; }
-      s.windowSec = clampWin(s.windowSec * (act === 'zoom-in' ? 0.67 : 1.5));
-      updateWinLabel(gid, s.windowSec);
+      zoomX(gid, act === 'zoom-in' ? 0.67 : 1.5, 0.5);
     });
     wrap.appendChild(hdr);
 
@@ -219,10 +227,16 @@ const Trend = (() => {
       cursorTableEl: curTbl,
       lastTableUpd: 0,
       view:         null,                      // геометрия последнего кадра
+      paused:       existing?.paused  || false,
+      viewEnd:      existing?.viewEnd || 0,    // конец окна на паузе (ms)
+      wrapEl:       wrap,
       raf: null
     };
     _strips.set(group.id, strip);
-    if (strip.cursors) setTimeout(() => setCursorBtn(group.id, true));
+    setTimeout(() => {
+      if (strip.cursors) setCursorBtn(group.id, true);
+      if (strip.paused)  setPausedUi(group.id, true);
+    });
 
     renderLegend(group.id);
     setupInteraction(canvas, group.id);
@@ -334,7 +348,8 @@ const Trend = (() => {
       canvas.style.cursor =
         info.zone === 'yaxis'  ? 'ns-resize' :
         info.zone === 'cursor' ? 'col-resize' :
-        info.zone === 'xaxis'  ? 'ew-resize' : 'crosshair';
+        info.zone === 'xaxis'  ? 'ew-resize' :
+        s?.paused ? 'grab' : 'crosshair';
     });
 
     canvas.addEventListener('mouseleave', () => {
@@ -351,11 +366,46 @@ const Trend = (() => {
       if (info.zone === 'yaxis' && info.tag) {
         scaleY(gid, info.tag.id, info.curY, e.deltaY);
       } else {
-        // xaxis или plot — оба масштабируют X
-        s.windowSec = clampWin(s.windowSec * (e.deltaY > 0 ? 1.5 : 0.67));
-        updateWinLabel(gid, s.windowSec);
+        // xaxis/plot/cursor — масштаб X. На паузе — вокруг точки под мышью,
+        // в живом режиме правый край всегда «сейчас».
+        const v = s.view;
+        const pivot = v ? Math.max(0, Math.min(1, (info.curX - v.pX) / v.pW)) : 1;
+        zoomX(gid, e.deltaY > 0 ? 1.5 : 0.67, pivot);
       }
     }, { passive: false });
+
+    // Drag по графику — прокрутка по времени (ставит паузу при сдвиге > 3 px)
+    canvas.addEventListener('mousedown', e => {
+      const info = z(e);
+      if (info.zone !== 'plot' || e.button !== 0) return;
+      const s    = _strips.get(gid);
+      const rect = canvas.getBoundingClientRect();
+      const sX   = canvas.width / rect.width;
+      const x0   = e.clientX;
+      let   end0 = null;
+
+      const onMove = ev => {
+        const v = s.view;
+        if (!v) return;
+        const dx = (ev.clientX - x0) * sX;
+        if (end0 === null) {
+          if (Math.abs(dx) < 3) return;
+          if (!s.paused) setPaused(gid, true);
+          end0 = s.viewEnd;
+          canvas.style.cursor = 'grabbing';
+        }
+        s.viewEnd = clampViewEnd(end0 - (dx / v.pW) * v.winMs, v.winMs);
+        s.lastTableUpd = 0;
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        canvas.style.cursor = 'crosshair';
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+      e.preventDefault();
+    });
 
     // Drag курсора
     canvas.addEventListener('mousedown', e => {
@@ -371,7 +421,7 @@ const Trend = (() => {
         if (!v || !s.cursors) return;
         let x = (ev.clientX - rect.left) * sX;
         x = Math.max(v.pX, Math.min(v.pX + v.pW, x));
-        s.cursors[ci] = (x - v.pX) / v.pW;
+        setCursorFromX(s, ci, x);
         s.lastTableUpd = 0;                    // таблицу — сразу
       };
       const onUp = () => {
@@ -441,8 +491,10 @@ const Trend = (() => {
     const m = _tagMeta.get(tagId);
     if (m?.isBool) return { min: -0.15, max: 1.15 };
     const s   = _strips.get(gid);
-    const now = Date.now();
-    const buf = (_buffer.get(tagId) || []).filter(p => p.ts >= now - (s?.windowSec||60)*1000);
+    const v   = s?.view;
+    const t1  = v ? v.vStart + v.winMs : Date.now();
+    const t0  = v ? v.vStart : t1 - (s?.windowSec || 60) * 1000;
+    const buf = sliceBuf(_buffer.get(tagId), t0, t1);
     if (!buf.length) return { min: 0, max: 1 };
     let lo = Infinity, hi = -Infinity;
     for (const p of buf) { if (p.value < lo) lo = p.value; if (p.value > hi) hi = p.value; }
@@ -515,12 +567,13 @@ const Trend = (() => {
     const tags  = getVisibleTags(gid);
     const winMs = s.windowSec * 1000;
     const now   = Date.now();
-    const vEnd  = now;
-    const vStart = now - winMs;
+    const vEnd  = s.paused ? s.viewEnd : now;
+    const vStart = vEnd - winMs;
     const lm    = tags.length * AXIS_W;
     const pX    = lm;
     const pW    = W - lm - 4;
     const pH    = H - BOTTOM_H;
+    s.view = { vStart, winMs, pX, pW, pH };   // нужно getCurRange() уже в этом кадре
 
     ctx.fillStyle = '#0d1117';
     ctx.fillRect(0, 0, W, H);
@@ -531,7 +584,8 @@ const Trend = (() => {
       const m      = _tagMeta.get(tag.id);
       if (!m) return;
       const buf    = _buffer.get(tag.id) || [];
-      const pts    = buf.filter(p => p.ts >= vStart - 2000 && p.ts <= vEnd);
+      // Один отсчёт левее окна — чтобы линия начиналась от края
+      const pts    = sliceBuf(buf, vStart, vEnd, true);
       const active = s.hoveredTagId === tag.id;
       const locked = s.yOverrides.has(tag.id);
       const { min: yMin, max: yMax } = getCurRange(gid, tag.id);
@@ -564,7 +618,6 @@ const Trend = (() => {
 
     drawXAxis(ctx, pX, pH, pW, BOTTOM_H, vStart, vEnd, s.windowSec);
 
-    s.view = { vStart, winMs, pX, pW, pH };
     if (s.cursors) {
       drawCursors(ctx, gid, tags);
       if (now - s.lastTableUpd >= TABLE_UPDATE_MS) {
@@ -581,6 +634,8 @@ const Trend = (() => {
     if (!s) return;
     if (s.cursors) {
       s.cursors = null;
+    } else if (s.paused && s.view) {
+      s.cursors = [s.view.vStart + s.view.winMs / 3, s.view.vStart + s.view.winMs * 2 / 3];
     } else {
       s.cursors = [1/3, 2/3];
     }
@@ -594,14 +649,109 @@ const Trend = (() => {
     document.getElementById(`trend-cur-btn-${gid}`)?.classList.toggle('active', on);
   }
 
+  // Курсор: в живом режиме — доля окна, на паузе — абсолютное время
+  function cursorTs(s, i) {
+    const v = s.view;
+    return s.paused ? s.cursors[i] : v.vStart + s.cursors[i] * v.winMs;
+  }
+
+  function cursorX(s, i) {
+    const v = s.view;
+    return v.pX + ((cursorTs(s, i) - v.vStart) / v.winMs) * v.pW;
+  }
+
+  function setCursorFromX(s, i, x) {
+    const v = s.view, f = (x - v.pX) / v.pW;
+    s.cursors[i] = s.paused ? v.vStart + f * v.winMs : f;
+  }
+
+  // ── Пауза и навигация по времени ─────────────────────────────────────
+
+  function setPaused(gid, on, atTs) {
+    const s = _strips.get(gid);
+    if (!s || s.paused === on) return;
+    const v = s.view;
+
+    if (on) {
+      const end = atTs ?? Date.now();
+      // Курсоры: доли окна → абсолютное время
+      if (s.cursors && v) s.cursors = s.cursors.map(f => end - s.windowSec * 1000 + f * s.windowSec * 1000);
+      s.viewEnd = end;
+      s.paused  = true;
+    } else {
+      // Курсоры остаются на тех же местах экрана
+      if (s.cursors && v) s.cursors = s.cursors.map(ts => Math.max(0, Math.min(1, (ts - v.vStart) / v.winMs)));
+      s.paused = false;
+    }
+    s.lastTableUpd = 0;
+    setPausedUi(gid, on);
+  }
+
+  function setPausedUi(gid, on) {
+    const btn = document.getElementById(`trend-pause-btn-${gid}`);
+    if (btn) { btn.textContent = on ? '▶' : '⏸'; btn.classList.toggle('active', on);
+               btn.title = on ? 'Продолжить (Пробел — все полосы)' : 'Пауза (Пробел — все полосы)'; }
+    const badge = document.getElementById(`trend-paused-${gid}`);
+    if (badge) badge.style.display = on ? '' : 'none';
+    _strips.get(gid)?.wrapEl?.classList.toggle('paused', on);
+  }
+
+  // Пробел: если хоть одна полоса живая — пауза всем в один момент, иначе — все в live
+  function togglePauseAll() {
+    const strips = [..._strips.entries()];
+    if (!strips.length) return;
+    const anyLive = strips.some(([, s]) => !s.paused);
+    const now = Date.now();
+    strips.forEach(([gid]) => setPaused(gid, anyLive, now));
+  }
+
+  function clampViewEnd(end, winMs) {
+    const now = Date.now();
+    let oldest = now;
+    for (const buf of _buffer.values()) if (buf.length && buf[0].ts < oldest) oldest = buf[0].ts;
+    return Math.max(Math.min(end, now), Math.min(oldest + winMs, now));
+  }
+
+  // factor > 1 — отдалить. pivot — доля окна, которая остаётся на месте.
+  function zoomX(gid, factor, pivot) {
+    const s = _strips.get(gid);
+    if (!s) return;
+    const oldMs = s.windowSec * 1000;
+    s.windowSec = clampWin(s.windowSec * factor);
+    const newMs = s.windowSec * 1000;
+    if (s.paused) {
+      const tPivot = s.viewEnd - oldMs + pivot * oldMs;
+      s.viewEnd = clampViewEnd(tPivot - pivot * newMs + newMs, newMs);
+    }
+    s.lastTableUpd = 0;
+    updateWinLabel(gid, s.windowSec);
+  }
+
+  // Индекс первого отсчёта с ts >= t
+  function lowerBound(buf, t) {
+    let lo = 0, hi = buf.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (buf[m].ts < t) lo = m + 1; else hi = m; }
+    return lo;
+  }
+
+  // Отсчёты в [t0, t1]; withPrev — плюс один отсчёт левее t0
+  function sliceBuf(buf, t0, t1, withPrev = false) {
+    if (!buf || !buf.length) return [];
+    let a = lowerBound(buf, t0);
+    if (withPrev && a > 0) a--;
+    let b = lowerBound(buf, t1);
+    if (b < buf.length && buf[b].ts === t1) b++;
+    return buf.slice(a, b);
+  }
+
   // Индекс курсора под X (px canvas) или -1
   function cursorAt(gid, cx) {
     const s = _strips.get(gid);
     const v = s?.view;
     if (!s?.cursors || !v) return -1;
     let best = -1, bestD = CURSOR_HIT_PX + 1;
-    s.cursors.forEach((f, i) => {
-      const d = Math.abs(v.pX + f * v.pW - cx);
+    s.cursors.forEach((_, i) => {
+      const d = Math.abs(cursorX(s, i) - cx);
       if (d < bestD) { bestD = d; best = i; }
     });
     return bestD <= CURSOR_HIT_PX ? best : -1;
@@ -623,9 +773,10 @@ const Trend = (() => {
     const s = _strips.get(gid);
     const { vStart, winMs, pX, pW, pH } = s.view;
 
-    s.cursors.forEach((f, ci) => {
-      const ts = vStart + f * winMs;
-      const x  = pX + f * pW;
+    s.cursors.forEach((_, ci) => {
+      const ts = cursorTs(s, ci);
+      const x  = cursorX(s, ci);
+      if (x < pX - 0.5 || x > pX + pW + 0.5) return;   // вне окна (на паузе)
       const col = CURSOR_COLORS[ci];
 
       ctx.save();
@@ -673,7 +824,7 @@ const Trend = (() => {
     const s = _strips.get(gid);
     const v   = s.view;
     if (!v) return;
-    const [t1, t2] = s.cursors.map(f => v.vStart + f * v.winMs);
+    const t1 = cursorTs(s, 0), t2 = cursorTs(s, 1);
     const dT  = t2 - t1;
 
     const rows = tags.map(tag => {
@@ -795,7 +946,8 @@ const Trend = (() => {
     for (let ts = first; ts <= vE; ts += step) {
       const px = x + (ts - vS)/(vE - vS) * w;
       const d  = new Date(ts);
-      const lb = winSec <= 120
+      const lb = step < 1000 ? fmtTimeMs(ts)
+        : winSec <= 120
         ? d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit',second:'2-digit'})
         : d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
       ctx.fillText(lb, px, y + 17);
@@ -823,7 +975,7 @@ const Trend = (() => {
   }
 
   function gridStep(dur) {
-    for (const s of [200,500,1000,2000,5000,10000,15000,30000,60000,120000,300000])
+    for (const s of [10,20,50,100,200,500,1000,2000,5000,10000,15000,30000,60000,120000,300000])
       if (dur/s <= 8) return s;
     return 60000;
   }
@@ -840,9 +992,10 @@ const Trend = (() => {
 
   function fmtWin(s) {
     if (s >= 60) { const m = s / 60; return (m < 10 ? +m.toFixed(1) : Math.round(m)) + 'м'; }
+    if (s < 1) return Math.round(s * 1000) + 'мс';
     return (s < 10 ? +s.toFixed(1) : Math.round(s)) + 'с';
   }
-  function clampWin(s) { return Math.max(5, Math.min(300, s)); }
+  function clampWin(s) { return Math.max(0.2, Math.min(BUFFER_MS / 1000, s)); }
   function updateWinLabel(gid, s) {
     const el = document.getElementById(`trend-win-${gid}`);
     if (el) el.textContent = fmtWin(s);
@@ -868,6 +1021,14 @@ const Trend = (() => {
       e.preventDefault();
     });
   }
+
+  document.addEventListener('keydown', e => {
+    if (!_visible || e.code !== 'Space' || e.repeat) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName))) return;
+    e.preventDefault();
+    togglePauseAll();
+  });
 
   // ── Публичный API ─────────────────────────────────────────────────────
 
