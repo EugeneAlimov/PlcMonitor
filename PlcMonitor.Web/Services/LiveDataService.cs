@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.SignalR;
@@ -54,8 +56,20 @@ namespace PlcMonitor.Web.Services
 
         // ── BackgroundService ─────────────────────────────────────────────────
 
+        // Системный таймер Windows по умолчанию тикает раз в ~15.6 мс —
+        // Task.Delay(5) на деле ждёт 15 мс. timeBeginPeriod(1) поднимает
+        // разрешение до 1 мс на время работы приложения.
+        [DllImport("winmm.dll")] private static extern uint timeBeginPeriod(uint ms);
+        [DllImport("winmm.dll")] private static extern uint timeEndPeriod(uint ms);
+        private bool _timerRaised;
+
         protected override Task ExecuteAsync(CancellationToken stoppingToken)
         {
+            if (OperatingSystem.IsWindows())
+            {
+                try { _timerRaised = timeBeginPeriod(1) == 0; }
+                catch (Exception ex) { _logger.LogWarning("timeBeginPeriod: {Ex}", ex.Message); }
+            }
             stoppingToken.Register(() => _ = StopAllAsync());
             return Task.CompletedTask;
         }
@@ -63,6 +77,7 @@ namespace PlcMonitor.Web.Services
         public override async Task StopAsync(CancellationToken ct)
         {
             await StopAllAsync();
+            if (_timerRaised) { timeEndPeriod(1); _timerRaised = false; }
             await base.StopAsync(ct);
         }
 
@@ -146,6 +161,16 @@ namespace PlcMonitor.Web.Services
                 ipAddress, reader.BrowsedCount);
 
             // ── 2. Основной цикл опроса ─────────────────────────────────────
+            //
+            // Фиксированный период: следующий старт = предыдущий старт + interval,
+            // время чтения и отправки в период не добавляется. При перегрузке
+            // (цикл дольше интервала) пропущенные тики не догоняем пачкой —
+            // начинаем отсчёт заново и считаем перегрузки для лога.
+
+            var  clock      = Stopwatch.StartNew();
+            long nextTickMs = 0;
+            int  overruns   = 0;
+            long lastOverrunLogMs = 0;
 
             while (!ct.IsCancellationRequested)
             {
@@ -184,6 +209,7 @@ namespace PlcMonitor.Web.Services
                         _logger.LogWarning("[{Plc}] Соединение потеряно", plcSourceId);
                         await SendStatusAsync(plcSourceId, "error", "Соединение потеряно");
                         await ReconnectAsync(plcSourceId, ipAddress, reader, ct);
+                        nextTickMs = clock.ElapsedMilliseconds;
                         continue;
                     }
 
@@ -191,9 +217,26 @@ namespace PlcMonitor.Web.Services
                         await PushTagValuesAsync(plcSourceId, results);
                 }
 
-                // Ждём следующего цикла
-                int interval = GetMinInterval(project, plcSourceId);
-                try   { await Task.Delay(interval, ct); }
+                // Ждём следующего тика
+                int  interval = GetMinInterval(project, plcSourceId);
+                nextTickMs += interval;
+                long waitMs = nextTickMs - clock.ElapsedMilliseconds;
+
+                if (waitMs < 0)
+                {
+                    overruns++;
+                    nextTickMs = clock.ElapsedMilliseconds;   // без догоняния
+                    if (clock.ElapsedMilliseconds - lastOverrunLogMs > 10_000)
+                    {
+                        _logger.LogWarning(
+                            "[{Plc}] Цикл опроса не укладывается в {Ms} мс (перегрузок: {N})",
+                            plcSourceId, interval, overruns);
+                        lastOverrunLogMs = clock.ElapsedMilliseconds;
+                    }
+                    continue;
+                }
+
+                try   { await Task.Delay((int)waitMs, ct); }
                 catch (OperationCanceledException) { break; }
             }
 

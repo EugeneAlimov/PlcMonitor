@@ -214,7 +214,9 @@ namespace PlcMonitor.Monitoring
 
             // Один вызов = один батч-запрос (ReadTags сам разбивает на чанки
             // если тегов больше чем TagsPerReadRequestMax ПЛК)
-            int res = _conn.ReadTags(_tagCache.Values);
+            long t0  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            int  res = _conn.ReadTags(_tagCache.Values);
+            long t1  = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             if (res != 0)
             {
@@ -223,7 +225,8 @@ namespace PlcMonitor.Monitoring
                 return new List<TagReadResult>();
             }
 
-            long tsMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            // Середина запроса — лучшая оценка момента, когда ПЛК отдал значения
+            long tsMs = (t0 + t1) / 2;
             var results = new List<TagReadResult>(_tagCache.Count);
 
             foreach (var kv in _tagCache)
